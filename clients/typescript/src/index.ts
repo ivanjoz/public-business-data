@@ -18,7 +18,13 @@
 
 import type { IExchangeRateDay } from './binfmt'
 import { SunatExchangeRate } from './exchange-rate'
-import { DEFAULT_CACHE_MINUTES, ManifestStore, type IClientOptions, type IManifestDataset } from './manifest'
+import {
+	DEFAULT_BASE_URL,
+	DEFAULT_CACHE_MINUTES,
+	ManifestStore,
+	type IClientOptions,
+	type IManifestDataset,
+} from './manifest'
 
 export class PublicBusinessData {
 	readonly manifests: ManifestStore
@@ -89,7 +95,14 @@ export function getCache(): number {
  * its entries: they are keyed by origin and cost nothing to leave behind).
  */
 export function setBaseUrl(baseUrl: string): void {
-	sharedOptions = { ...sharedOptions, baseUrl }
+	// Apuntar al mismo sitio no es un cambio. Sin esta salida, dos componentes que fijen el mismo
+	// origen —lo normal: cada uno se basta a sí mismo y ninguno sabe del otro— tirarían la
+	// instancia del otro y volverían a pedirlo todo, y el resultado dependería de en qué orden
+	// se monten.
+	const normalized = baseUrl.replace(/\/$/, '')
+	if (normalized === (sharedOptions.baseUrl ?? DEFAULT_BASE_URL).replace(/\/$/, '')) return
+
+	sharedOptions = { ...sharedOptions, baseUrl: normalized }
 	shared = undefined
 }
 
@@ -107,6 +120,21 @@ export function refresh(): void {
 /** Empties IndexedDB: the manifest and every cached year. */
 export function clearCache(): Promise<void> {
 	return instance().clearCache()
+}
+
+/**
+ * When the published data last changed, as a Date.
+ *
+ * It is not the time of the last run: the updater only writes when a hash moved, so this stamp
+ * moves with the data and not with the cron. Different from `getSunatLastPublishedDate`, which
+ * is the last day the series covers — a rate for Monday can be published on Monday morning, so
+ * one answers "hasta cuándo llegan los datos" and the other "cuándo se tocaron por última vez".
+ *
+ * Read from the manifest, so it costs nothing beyond the manifest itself.
+ */
+export async function getManifestGenerated(): Promise<Date> {
+	const manifest = await instance().manifests.get()
+	return new Date(manifest.generated * 1000)
 }
 
 /** The dataset's own description: source, unit, scale, years published. */

@@ -67,7 +67,8 @@ uso. **Importar el módulo no dispara nada**: ni una petición, ni abrir Indexed
 import {
   getSunatRate, getLatestSunatRate, getSunatRateRange, getSunatRateYears,
   getSunatMonthArrays, getSunatAvailableYears, getSunatLastPublishedDate,
-  describeSunatExchangeRate, setCache, getCache, refresh, clearCache, setBaseUrl,
+  describeSunatExchangeRate, getManifestGenerated,
+  setCache, getCache, refresh, clearCache, setBaseUrl,
 } from '@ivanjoz/public-business-data'
 
 await getSunatRate('2026-09-20')
@@ -80,8 +81,14 @@ await getSunatRateRange('2024-01-01', '2024-03-31')   // IExchangeRateDay[], só
 await getSunatMonthArrays(2026, 9)               // { buy: number[31], sell: number[31] }, ×1000, 0 = sin dato
 await getSunatAvailableYears()                   // ['2021', ..., '2026']
 await getSunatLastPublishedDate()                // '2026-09-21', sin descargar ningún año
+await getManifestGenerated()                     // Date: cuándo cambiaron los datos por última vez
 await describeSunatExchangeRate()                // fuente, unidad, escala, años
 ```
+
+`getSunatLastPublishedDate` y `getManifestGenerated` responden a preguntas distintas: la primera
+es **hasta cuándo llegan los datos** y la segunda **cuándo se tocaron por última vez**. El sello
+del manifest sólo se mueve en una publicación real — el updater escribe cuando un hash cambió,
+no cuando el cron corrió — así que sigue al dato y no al reloj.
 
 ### `getSunatRateYears(yearsAgo)`
 

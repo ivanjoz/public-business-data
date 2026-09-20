@@ -15,18 +15,23 @@ type Bundle = typeof import('./index')
 
 let client: Bundle
 
+/** Peticiones servidas desde disco, para las pruebas que miran si algo volvió a pedirse. */
+let requests = 0
+
+// El bundle apunta al sitio público; aquí se sirve docs/ desde disco.
+const diskFetch = (async (url: string | URL) => {
+	requests++
+	const path = String(url).replace('https://public-business-data.un.pe/', '')
+	try {
+		return new Response(new Uint8Array(await readFile(join(DOCS_DIR, path))), { status: 200 })
+	} catch {
+		return new Response('not found', { status: 404 })
+	}
+}) as unknown as typeof globalThis.fetch
+
 beforeAll(async () => {
 	client = (await import(BUNDLE)) as Bundle
-
-	// El bundle apunta al sitio público; aquí se sirve docs/ desde disco.
-	client.setFetch((async (url: string | URL) => {
-		const path = String(url).replace('https://public-business-data.un.pe/', '')
-		try {
-			return new Response(new Uint8Array(await readFile(join(DOCS_DIR, path))), { status: 200 })
-		} catch {
-			return new Response('not found', { status: 404 })
-		}
-	}) as unknown as typeof globalThis.fetch)
+	client.setFetch(diskFetch)
 })
 
 describe('dist/client.mjs', () => {
@@ -35,7 +40,7 @@ describe('dist/client.mjs', () => {
 			'setCache', 'getCache', 'setBaseUrl', 'setFetch', 'refresh', 'clearCache',
 			'getSunatRate', 'getLatestSunatRate', 'getSunatRateRange', 'getSunatRateYears',
 			'getSunatMonthArrays', 'getSunatAvailableYears', 'getSunatLastPublishedDate',
-			'describeSunatExchangeRate', 'createPublicBusinessData',
+			'describeSunatExchangeRate', 'getManifestGenerated', 'createPublicBusinessData',
 		] as const) {
 			expect(typeof client[name], name).toBe('function')
 		}
@@ -75,6 +80,29 @@ describe('dist/client.mjs', () => {
 		const days = await client.getSunatRateYears(5)
 		expect(days[0]?.date).toBe('2021-09-21')
 		expect(days.at(-1)?.date).toBe('2026-09-21')
+	})
+
+	it('getManifestGenerated devuelve el sello del manifest', async () => {
+		const generated = await client.getManifestGenerated()
+		expect(generated).toBeInstanceOf(Date)
+
+		// El sello es el del docs/ publicado, así que se comprueba contra el archivo y no contra
+		// una fecha escrita a mano, que caducaría en la siguiente corrida del updater.
+		const manifest = JSON.parse(await readFile(join(DOCS_DIR, 'manifest.json'), 'utf8'))
+		expect(generated.getTime()).toBe(manifest.generated * 1000)
+	})
+
+	it('setBaseUrl al mismo origen no tira lo ya descargado', async () => {
+		// Con el manifest y 2026 ya en memoria de las pruebas anteriores, repetir el origen no
+		// debe costar ni una petición. Si reinstanciara, habría que volver a bajar los dos.
+		const before = await client.getSunatRate('2026-09-20')
+		requests = 0
+
+		client.setBaseUrl('https://public-business-data.un.pe')
+		client.setBaseUrl('https://public-business-data.un.pe/') // la barra final es el mismo sitio
+
+		expect((await client.getSunatRate('2026-09-20'))?.buy).toBe(before?.buy)
+		expect(requests).toBe(0)
 	})
 
 	it('setCache cambia la ventana y getCache la reporta', () => {

@@ -94,6 +94,7 @@ await getLatestSunatRate()              // el último día publicado
 await getSunatMonthArrays(2026, 9)      // { buy: number[31], sell: number[31] }
 await getSunatAvailableYears()          // ${JSON.stringify(years)}
 await getSunatLastPublishedDate()       // '${lastDate}', sin descargar ningún año
+await getManifestGenerated()            // Date: cuándo cambiaron los datos por última vez
 await describeSunatExchangeRate()       // fuente, unidad, escala, años`,
   )}
 

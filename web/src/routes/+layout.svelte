@@ -5,9 +5,33 @@
   import { base } from '$app/paths'
   import { page } from '$app/state'
   import { afterNavigate } from '$app/navigation'
+  import { getManifestGenerated, setBaseUrl } from '$client'
 
   const { children } = $props()
   let menuOpen = $state(false)
+
+  let generated = $state<Date | undefined>()
+
+  $effect(() => {
+    setBaseUrl(location.origin)
+    // Sin catch visible: es un dato de cortesía en la cabecera. Si el manifest no carga, quien
+    // lo dice es la página, que es la que no puede hacer su trabajo sin él.
+    getManifestGenerated()
+      .then((date) => { generated = date })
+      .catch(() => {})
+  })
+
+  // Hora local de quien mira. El sello del manifest es UTC y el dataset es peruano, pero esto
+  // responde a «hace cuánto se actualizó», que se lee contra el reloj de uno.
+  const generatedLabel = $derived(
+    generated?.toLocaleString('es-PE', {
+      day: '2-digit',
+      month: 'short',
+      year: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+    }),
+  )
 
   // Se cierra al navegar y no con un click en cualquier parte del cajón: los enlaces son lo
   // único que hay dentro, y un handler en el contenedor sería un gesto sólo de ratón.
@@ -26,8 +50,16 @@
     <button class="menu-toggle" onclick={() => (menuOpen = !menuOpen)} aria-label="Datasets">
       ☰
     </button>
-    <a class="brand" href="{base}/">public-business-data</a>
-    <span class="tagline">Datos públicos, como archivos binarios estáticos</span>
+    <a class="brand" href="{base}/">Data Pública para Negocios</a>
+    <span class="head-text">
+      <span class="tagline">Datos públicos, como archivos binarios estáticos</span>
+      {#if generatedLabel}
+        <!-- El título lleva el sello exacto: la línea de la cabecera redondea al minuto. -->
+        <span class="updated" title={generated?.toISOString()}>
+          Última actualización: {generatedLabel}
+        </span>
+      {/if}
+    </span>
     <span class="spacer"></span>
     <a class="repo" href="https://github.com/ivanjoz/public-business-data" rel="noreferrer">
       <i class="icon-[fa--github]"></i>GitHub
@@ -74,9 +106,23 @@
     text-decoration: none;
   }
 
+  /* Las dos líneas van apiladas en una columna y no sueltas en la fila: la cabecera centra
+     verticalmente a sus hijos, así que sin envoltorio la fecha se pondría al lado del lema en
+     vez de debajo. */
+  .head-text {
+    display: flex;
+    flex-direction: column;
+    line-height: 1.2;
+  }
+
   .tagline {
     font-size: 13px;
     color: #c8c9ef;
+  }
+
+  .updated {
+    font-size: 11.5px;
+    color: #a3a4e0;
   }
 
   .spacer { flex: 1; }
@@ -164,7 +210,8 @@
   }
 
   @media (max-width: 749px) {
-    .tagline { display: none; }
+    /* Se va el bloque entero, lema y fecha: en móvil la cabecera es para el título y el menú. */
+    .head-text { display: none; }
     .menu-toggle { display: inline-block; }
 
     .sidebar {
