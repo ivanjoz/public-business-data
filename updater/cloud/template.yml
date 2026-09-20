@@ -62,11 +62,14 @@ Resources:
               - Effect: Allow
                 Action: ssm:GetParameter
                 Resource: !Sub "arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter${GitHubTokenSSM}"
-              # El SecureString usa la clave gestionada de SSM, así que el Decrypt se concede
-              # sobre la clave por defecto de la cuenta y acotado al servicio que la usa.
+              # Descifrar el SecureString. El Resource va en "*" y no en el ARN de la clave
+              # porque un alias no sirve para autorizar —IAM sólo compara ARNs de clave— y el
+              # id de la clave gestionada es distinto en cada cuenta y región, así que no se
+              # puede escribir en un template. Lo que acota de verdad es la condición: este rol
+              # sólo puede descifrar cuando la llamada llega a través de SSM.
               - Effect: Allow
                 Action: kms:Decrypt
-                Resource: !Sub "arn:aws:kms:${AWS::Region}:${AWS::AccountId}:alias/aws/ssm"
+                Resource: "*"
                 Condition:
                   StringEquals:
                     kms:ViaService: !Sub "ssm.${AWS::Region}.amazonaws.com"
