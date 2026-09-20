@@ -1,0 +1,132 @@
+@import 'tailwindcss';
+@plugin "@iconify/tailwind4" {
+	prefix: "icon";
+	scale: 1;
+}
+
+/* Tailwind ignora node_modules, así que hay que apuntar a las clases del paquete o no se
+   genera ninguna. Sólo los directorios que este sitio importa. */
+@source "../node_modules/@genix/ui/{buttons,cards,form,misc,navigation,runtime,vTable}/**/*.svelte";
+
+@theme {
+	/* 1px, como en la aplicación para la que se hicieron estos componentes. Todas sus
+	   utilidades de espaciado lo asumen: con los 4px por defecto de Tailwind, `h-4` pasa a
+	   16px y la librería entera renderiza cuatro veces más grande. */
+	--spacing: 1px;
+	--breakpoint-md: 749px;
+	--breakpoint-lg: 1139px;
+	--breakpoint-xl: 1379px;
+	--font-size-xs: 14px;
+	--font-size-sm: 15px;
+	--font-size-base: 16px;
+	--font-size-lg: 18px;
+	--font-size-xl: 20px;
+	--leading-tight: 1.2;
+}
+
+/* Tokens que los componentes leen de un ancestro. Traen fallbacks, pero leen estos primero. */
+:root {
+	--primary: #4042a3;
+	--secondary: #eeefff;
+	--gray1: #2b2b2e;
+	--text-sm: 15px;
+	--text-xs: 14px;
+	--fs1: 16px;
+	--fs2: 15px;
+	--fs3: 14px;
+	--input-text-color-disabled: #56508b;
+}
+
+* {
+	box-sizing: border-box;
+}
+
+/* La barra de scroll de la tabla.
+ *
+ * TableGrid declara `::-webkit-scrollbar { width: 12px }` sobre su contenedor y nada más. Esa
+ * sola declaración basta para que un motor WebKit abandone la barra nativa y pase a la
+ * personalizada, así que sin un thumb y un track definidos reserva los 12px y no pinta nada: la
+ * tabla scrollea y la barra es invisible. El paquete da por hecho que la aplicación anfitriona
+ * los define — la de genix lo hace en su app.css global — así que aquí se replican.
+ *
+ * Sólo en escritorio: en móvil la barra flotante del sistema es la correcta.
+ */
+@media only screen and (min-width: 680px) {
+	/* Esto es lo que de verdad pinta la barra hoy: Chrome ≥121, Firefox y Safari ≥18.2. Las dos
+	   propiedades heredan, así que en la raíz alcanzan a cualquier contenedor que scrollee,
+	   incluido el de TableGrid, sin nombrar su clase. Y mientras estén puestas el motor usa la
+	   barra estándar e ignora los pseudoelementos de abajo. */
+	:root {
+		scrollbar-width: auto;
+		scrollbar-color: #b2b6e8 #e9ecf4;
+	}
+
+	/* El camino heredado, para los motores sin scrollbar-color, que son justo los que se quedan
+	   sin barra por la declaración del componente. */
+	::-webkit-scrollbar {
+		width: 12px;
+		height: 12px;
+	}
+
+	::-webkit-scrollbar-track {
+		background-color: #e9ecf4;
+		border-radius: 4px;
+	}
+
+	::-webkit-scrollbar-thumb {
+		background-color: #b2b6e8;
+		border-radius: 8px;
+		/* Cinco años de calendario dejan el thumb en unos pocos píxeles. */
+		min-height: 32px;
+	}
+
+	::-webkit-scrollbar-thumb:hover {
+		background-color: #9a9ee0;
+	}
+}
+
+/* El paquete marca énfasis con estas dos clases, que la aplicación anfitriona resuelve a
+   FAMILIAS distintas. Aquí hay una sola familia, así que van a pesos. */
+.ff-bold { font-weight: 600; }
+.ff-semibold { font-weight: 500; }
+.ff-mono { font-family: ui-monospace, 'SF Mono', Menlo, Consolas, monospace; }
+
+/* Las pestañas de OptionsStrip se ajustan al texto, así que "Muestra" e "Integración" saldrían
+   de anchos distintos. Un mínimo las iguala. !important porque el componente pone su propio
+   padding en la misma clase del botón. */
+.strip-button { min-width: 170px !important; }
+
+body {
+	margin: 0;
+	font-family: 'Inter', system-ui, -apple-system, sans-serif;
+	color: #2c2b2e;
+	font-size: var(--fs1);
+	background-color: #ecf0f2;
+
+	--header-height: 48px;
+	--row-height: 34px;
+	--input-height: 42px;
+	--input-border-color: #d0d4e7;
+	--light-blue-1: #edeff6;
+	--white: #ffffff;
+	--purple-2: #3b2e9d;
+	--purple-3: #6459a4;
+	--purple-6: #5424bc;
+	--gray-purple-1: #bcb7e7;
+	--gray-purple-2: #c3c5df;
+	--input-color-bottom: rgba(109, 92, 150, 0.329);
+	--color-11: #9d9ef0;
+	--menu-max-width: 240px;
+	--menu-min-width: 70px;
+	--pad-1: 12px;
+	--pad-2: 14px;
+	--pad-3: 16px;
+
+	--modal-zindex: 175;
+	--layer-zindex: 101;
+	--portal-zindex: 201;
+}
+
+h1, h2, h3, h4, h5, h6 {
+	margin: 0;
+}

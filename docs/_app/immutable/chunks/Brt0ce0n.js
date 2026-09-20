@@ -1,0 +1,1 @@
+import{ct as e}from"./DQfOmG1Z.js";var t=e(((e,t)=>{var n=/[\f\n\r\t\v ]{2,}/g;t.exports=function(e){return e.replace(n,` `)}}));export default t();

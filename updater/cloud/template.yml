@@ -1,0 +1,132 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: public-business-data - updater del tipo de cambio SUNAT en Lambda + EventBridge
+
+# Desplegado por deploy.sh. Todo lo que varía llega como parámetro leído de config.toml,
+# así que este archivo se mantiene estático y versionado.
+
+Parameters:
+  NamePrefix:
+    Type: String
+    Description: Prefija cada recurso físico. Sale de github.repo en config.toml.
+  DeploymentBucket:
+    Type: String
+    Description: Bucket existente donde deploy.sh sube el .zip compilado.
+  CompiledS3Key:
+    Type: String
+    Description: Key del .zip dentro de DeploymentBucket.
+  GitHubOwner:
+    Type: String
+  GitHubRepo:
+    Type: String
+  GitHubBranch:
+    Type: String
+    Default: main
+  GitHubCommitName:
+    Type: String
+  GitHubCommitEmail:
+    Type: String
+  GitHubTokenSSM:
+    Type: String
+    Description: >-
+      Nombre del parámetro SecureString con el PAT. Sólo el nombre viaja por aquí: el valor
+      nunca entra al template porque quedaría visible en la consola de CloudFormation.
+  LookbackDays:
+    Type: String
+    Default: "0"
+    Description: 0 = el mes corriente completo, que repara los huecos de una corrida fallida.
+  Schedule:
+    Type: String
+    Description: Cadencia del EventBridge. SUNAT publica temprano; 3 intentos cubren el retraso.
+
+Resources:
+  # Rol propio y no el serverlessCloud compartido: aquel es amplísimo y aun así no puede leer
+  # SSM, que es justo lo único que esta función necesita además de escribir sus logs.
+  UpdaterRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${NamePrefix}-updater"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: { Service: lambda.amazonaws.com }
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: updater
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: [logs:CreateLogStream, logs:PutLogEvents]
+                Resource: !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/${NamePrefix}-updater:*"
+              - Effect: Allow
+                Action: ssm:GetParameter
+                Resource: !Sub "arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter${GitHubTokenSSM}"
+              # El SecureString usa la clave gestionada de SSM, así que el Decrypt se concede
+              # sobre la clave por defecto de la cuenta y acotado al servicio que la usa.
+              - Effect: Allow
+                Action: kms:Decrypt
+                Resource: !Sub "arn:aws:kms:${AWS::Region}:${AWS::AccountId}:alias/aws/ssm"
+                Condition:
+                  StringEquals:
+                    kms:ViaService: !Sub "ssm.${AWS::Region}.amazonaws.com"
+
+  # Sin Function URL a propósito: nada la invoca desde fuera, sólo el cron.
+  UpdaterFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub "${NamePrefix}-updater"
+      Runtime: provided.al2023
+      Handler: bootstrap
+      Architectures: [arm64]
+      MemorySize: 128
+      # 60 s sobra: una corrida sin cambios son 3 GET. El techo está para que un endpoint
+      # colgado no deje la función esperando, no porque el trabajo pueda tardar.
+      Timeout: 60
+      Role: !GetAtt UpdaterRole.Arn
+      Code:
+        S3Bucket: !Ref DeploymentBucket
+        S3Key: !Ref CompiledS3Key
+      Environment:
+        Variables:
+          GITHUB_OWNER: !Ref GitHubOwner
+          GITHUB_REPO: !Ref GitHubRepo
+          GITHUB_BRANCH: !Ref GitHubBranch
+          GITHUB_COMMIT_NAME: !Ref GitHubCommitName
+          GITHUB_COMMIT_EMAIL: !Ref GitHubCommitEmail
+          GITHUB_TOKEN_SSM: !Ref GitHubTokenSSM
+          LOOKBACK_DAYS: !Ref LookbackDays
+
+  # Declarado sólo para acotar la retención; Lambda lo crearía igual pero sin límite.
+  UpdaterLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${NamePrefix}-updater"
+      RetentionInDays: 30
+
+  UpdaterSchedule:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: !Sub "${NamePrefix}-updater-schedule"
+      Description: Revisa el tipo de cambio SUNAT y publica sólo si el hash cambió
+      ScheduleExpression: !Ref Schedule
+      State: ENABLED
+      Targets:
+        - Id: Target0
+          Arn: !GetAtt UpdaterFunction.Arn
+
+  UpdaterSchedulePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !GetAtt UpdaterFunction.Arn
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt UpdaterSchedule.Arn
+
+Outputs:
+  FunctionName:
+    Value: !Ref UpdaterFunction
+  RoleArn:
+    Value: !GetAtt UpdaterRole.Arn
+  LogGroup:
+    Value: !Ref UpdaterLogGroup

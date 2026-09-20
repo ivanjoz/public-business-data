@@ -1,0 +1,56 @@
+# Configuración de public-business-data. Copie este archivo a config.toml y complete los valores.
+# config.toml está en .gitignore: nunca se versiona.
+#
+# Sólo vive aquí lo que cambia entre entornos o lo que es un secreto. Todo lo demás es código:
+# el formato binario, la escala, las URLs de las fuentes y la descripción de cada dataset están
+# en updater/binfmt y updater/manifest, porque son la definición del dato y no una preferencia.
+#
+# Dos valores que podrían estar aquí y a propósito no están, para que no haya dos fuentes de
+# verdad que puedan desincronizarse:
+#   · el dominio público  → lo manda docs/CNAME, que es lo que GitHub Pages realmente lee
+#   · el nombre de la app → es github.repo; de ahí sale el prefijo de los recursos en AWS
+
+# ─── GitHub ─────────────────────────────────────────────────────────────────
+# El repositorio donde la lambda commitea docs/.
+#
+# El estado publicado se lee por la API de GitHub, NO por el dominio de Pages: Pages cachea
+# 600 s, y un manifest rancio le haría creer que el año cambió y publicar un commit con el
+# mismo árbol. La API contesta el commit actual siempre.
+[github]
+owner        = "ivanjoz"
+repo         = "public-business-data"
+branch       = "main"
+commit_name  = "public-business-data bot"
+commit_email = "bot@un.pe"
+# PAT fine-grained con un único permiso — Contents: Read and write — y alcance a este solo
+# repositorio. Es para correr el updater en local o en CI; en Lambda el token sale de
+# aws.github_token_ssm y esta clave queda vacía.
+token = ""
+
+# ─── AWS ────────────────────────────────────────────────────────────────────
+[aws]
+# Cuenta ivan@un.pe (569069031635).
+region            = "us-east-1"
+profile           = "default"
+deployment_bucket = "main-serverless-deploys"
+# No hay lambda_iam_role: el stack crea el suyo. El serverlessCloud que comparte genix es
+# amplísimo y aun así no puede leer SSM, que es lo único que esta función necesita además
+# de escribir sus logs.
+# Parámetro SecureString con el PAT. Nunca como variable de entorno de la Lambda: ahí queda
+# visible en la consola de Lambda y en la de CloudFormation.
+github_token_ssm = "/public-business-data/github-token"
+# SUNAT publica temprano (el cierre de la SBS del día hábil anterior). Tres intentos al día
+# —09:00, 13:00 y 17:00 de Lima— cubren un retraso sin ser un poll agresivo: la corrida sin
+# cambios son tres GET y termina en menos de un segundo.
+schedule = "cron(0 14,18,22 ? * * *)"
+
+# ─── Actualizador ───────────────────────────────────────────────────────────
+[updater]
+# Días hacia atrás que se le vuelven a pedir a la fuente.
+# 0 = el mes corriente completo, que cuesta exactamente la misma llamada HTTP y hace el proceso
+# auto-reparable: si la lambda falló unos días o SUNAT corrigió una cotización de la semana
+# pasada, la siguiente corrida lo arregla sola. La compuerta del hash evita el commit extra.
+lookback_days = 0
+# Calcula los hashes y reporta qué publicaría, sin commitear. Útil en local y en el primer
+# despliegue.
+dry_run = false
