@@ -4,7 +4,9 @@ Repositorio de datos públicos de negocio, publicados como archivos binarios com
 estáticos en GitHub Pages (`https://public-business-data.un.pe`), mantenidos por una lambda en Go
 que sólo hace commit cuando el dato realmente cambió.
 
-Primer dataset: **tipo de cambio oficial SUNAT USD/PEN (compra y venta)**.
+Datasets: **tipo de cambio oficial SUNAT USD/PEN** y **tipo de cambio interbancario BCRP USD/PEN**,
+los dos con compra y venta. El primero es el valor contable que pide la norma tributaria; el
+segundo es la cotización de mercado. Ver §11.
 
 ---
 
@@ -75,7 +77,9 @@ docs/
 ├── .nojekyll                             Pages copia los archivos, no corre Jekyll
 ├── index.html                            landing: qué hay aquí y cómo se lee   [pendiente]
 ├── manifest.json                         archivo maestro de hashes
-└── sunat-usd-pen/
+├── sunat-usd-pen/
+│   ├── 2021.gz  2022.gz  2023.gz  2024.gz  2025.gz  2026.gz
+└── bcrp-interbancario-usd-pen/
     ├── 2021.gz  2022.gz  2023.gz  2024.gz  2025.gz  2026.gz
 ```
 
@@ -83,46 +87,59 @@ docs/
 
 ```jsonc
 {
-  "version": 1,
-  "generated": 1789933819,                       // unix; se mueve en cada publicación
+  "version": 2,
+  "generated": 1789948262,                       // unix; se mueve en cada publicación
   "datasets": {
+    "bcrp-interbancario-usd-pen": {
+      "2025": {"h":"843d4f53f5904c4c","r":248,"d":20453},
+      "2026": {"h":"4c984be6f7415b22","r":176,"d":20714}
+    },
     "sunat-usd-pen": {
-      "title": "Tipo de cambio oficial SUNAT — dólar estadounidense (compra y venta)",
-      "source": "SUNAT — ...", "sourceUrl": "https://www.sunat.gob.pe/a/txt/tipoCambio.txt",
-      "unit": "PEN por 1 USD",
-      "record": "unixDay:int16, buy:int32, sell:int32 — little endian, 10 bytes",
-      "scale": 1000,
-      "hashAlgo": "fnv-1a-64",
-      "files": {
-        "2026": { "hash": "7da90ae37e84eae0", "records": 264, "lastDate": "2026-09-21" }
-      }
+      "2026": {"h":"7da90ae37e84eae0","r":264,"d":20717}
     }
+  },
+  "provisional": {                               // ausente cuando no hay ningún día de relleno
+    "bcrp-interbancario-usd-pen": [20714]
   }
 }
 ```
 
-El manifest se autodescribe (`record`, `scale`, `unit`): alguien puede decodificar un archivo sin
-leer una línea de este repo.
+Es un índice, no un documento. Tiene exactamente dos trabajos — *"¿cambió el año Y?"* para la
+lambda y *"¿qué años hay y sigue vigente mi caché?"* para el cliente — y los dos se responden con
+tres valores por año:
 
-**Cada entrada de año son 3 campos, no 9.** El manifest tiene exactamente dos trabajos —
-*"¿cambió el año Y?"* para la lambda y *"¿qué años hay y sigue vigente mi caché?"* para el
-cliente — y para ambos basta `hash`. Lo que se quitó y por qué:
-
-| campo | por qué sobraba |
+| clave | qué es |
 | --- | --- |
-| `path` | es `{clave del dataset}/{año}.gz`; la clave del dataset **es** la carpeta y la del año **es** el archivo |
-| `bytes` | `records × 10` |
-| `gzipBytes` | no lo usa nadie: el cliente no preasigna, descomprime en streaming |
-| `firstDay`, `firstDate` | el 1 de enero del año de la clave, salvo el primer año de la serie |
-| `lastDay` | lo mismo que `lastDate` en otra unidad; el cliente ya convierte fechas |
-| `recordSize`, `endianness` | plegados a la línea `record`, que es prosa para humanos — nadie la parsea |
-| `site` | un cliente que acaba de descargar el manifest ya sabe de qué origen vino |
+| `h` | hash FNV-1a-64 del payload **sin comprimir**; lo único que la lambda compara |
+| `r` | cantidad de días — cuánto hay, sin descargar el archivo |
+| `d` | último día, como `unixDay` — hasta cuándo llega, sin descargar el archivo |
 
-Se quedan `records` y `lastDate` porque son las dos preguntas que se responden **sin descargar el
-archivo**: cuánto hay y hasta cuándo llega. Costo total: 1 333 bytes para 6 años (antes 2 637).
+La ruta no se guarda: es `{clave del dataset}/{año}.gz`, donde la clave del dataset **es** la
+carpeta y la del año **es** el archivo.
+
+**v2 sacó la prosa.** `title`, `source`, `sourceUrl`, `unit`, `record`, `scale` y `hashAlgo` eran
+los mismos ~600 bytes por dataset en cada publicación, redescargados por cada visitante en cada
+fallo de caché, para decir algo que sólo cambia cuando cambia este repositorio. Ahora viven en
+`clients/typescript/src/descriptions.ts` y el cliente los vuelve a pegar al expandir el manifest,
+así que la API pública no cambió: `describeSunatExchangeRate()` sigue devolviendo `title`, `unit`
+y `scale`. Quien lea el `.json` en crudo sin este cliente necesita esa tabla — está en el README y
+en §2 de este plan.
+
+`d` va en `unixDay` y no en ISO por la misma razón: el cliente ya convierte `unixDay` en cada
+registro que decodifica, así que una fecha aquí sería el único sitio del formato que necesita otro
+parser.
+
+Costo: 899 bytes para 2 datasets × 6 años (v1: 3 139; el formato original antes de v1: ~5 000).
+
+`version` se verifica en las dos direcciones, y tanto en Go como en TypeScript: una versión que no
+es la propia **corta la lectura** en vez de leerse a medias. Más nuevo es obvio — un binario que no
+entiende lo publicado no puede sobrescribirlo. Más viejo importa igual y menos obviamente: leerlo
+como un índice vacío parece inofensivo porque los años se recalculan, pero cualquier dataset que
+*no* se escriba en esa misma corrida desaparecería del índice con sus `.gz` intactos en disco.
+Subir de formato es re-sembrar, no adivinar.
 
 `generated` cambia en cada publicación, por eso **nunca** entra en lo que la lambda compara —
-la comparación es por `hash` de cada año, no por el manifest completo.
+la comparación es por `h` de cada año, no por el manifest completo.
 
 ---
 
@@ -219,14 +236,18 @@ sin dependencias). No hace falta para v1.
 
 - `AWS::Lambda::Function` — `provided.al2023`, `Handler: bootstrap`, `Architectures: [arm64]`,
   `MemorySize: 128`, `Timeout: 60`. Sin Function URL: nada la invoca desde fuera.
-- `AWS::Events::Rule` — `cron(0 14,18,22 ? * * *)` (09:00 / 13:00 / 17:00 Lima). SUNAT publica
-  temprano; tres intentos cubren el retraso sin ser un poll agresivo. La corrida sin cambios son
-  ~3 GET y termina en menos de un segundo.
+- `AWS::Events::Rule` — `cron(15 0-1,11-23 ? * * *)`: una corrida por hora, de **06:15 a 20:15 de
+  Lima**, 15 al día. EventBridge sólo entiende UTC y Lima es UTC−5 todo el año, por eso el rango
+  de horas está partido — `0-1,11-23` son 15 horas, no un tramo continuo. Lo que hace que barrer
+  la mañana entera no sea un poll agresivo es la **compuerta del hash**: una corrida sin cambios
+  son ~4 GET, no commitea y termina en menos de un segundo.
 - `AWS::Logs::LogGroup` con `RetentionInDays: 30`.
 - Rol con `ssm:GetParameter` + `kms:Decrypt` sobre el parámetro, y nada más.
 - El `.zip` se arma con el mismo truco de `genix/cloud/lambda-zip.go` (symlink `bootstrap`).
 
-Coste: ~90 invocaciones/mes de 128 MB y <1 s. Dentro del free tier por varios órdenes de magnitud.
+Coste: ~450 invocaciones/mes de 128 MB y <1 s. El free tier de Lambda es 1 M de peticiones y
+400 000 GB·s al mes; esto son ~450 peticiones y ~56 GB·s. Sigue sobrando por varios órdenes de
+magnitud, y lo mismo del lado de GitHub: 450 corridas/mes contra un límite de 5 000 llamadas/hora.
 
 > **Alternativa que vale la pena considerar.** Un workflow de GitHub Actions con `schedule:` hace
 > lo mismo con **cero infraestructura AWS y cero gestión de credenciales** — el `GITHUB_TOKEN`
@@ -301,9 +322,10 @@ IndexedDB ni toca la red.
 
 ### API
 
-La API plana nombra la fuente en cada función, porque este es el tipo de cambio que publica SUNAT
-y no una cotización de mercado — y así un dataset futuro de la SBS o del BCRP entra como
-`getSbsRate` / `getBcrpRate` sin colisionar ni obligar a renombrar nada.
+La API plana nombra la fuente en cada función, porque el de SUNAT es un valor contable y no una
+cotización de mercado — y así un dataset de la SBS o del BCRP entra como `getSbsRate` /
+`getBcrpRate` sin colisionar ni obligar a renombrar nada. Eso es exactamente lo que pasó después
+con el BCRP (§11): la familia `getBcrp…` entró sin tocar una sola firma de las de SUNAT.
 
 ```ts
 await getSunatRate('2026-09-18')         // IExchangeRateDay | null
@@ -313,9 +335,14 @@ await getSunatRateYears(5)               // BULK: los últimos 5 años
 await getSunatMonthArrays(2026, 9)       // { buy: number[31], sell: number[31] }
 await getSunatLastPublishedDate()        // '2026-09-21', sin bajar ningún año
 
+// La misma familia para el interbancario del BCRP:
+await getBcrpRate('2026-09-17')
+await getBcrpRateYears(5)
+
 // La clase, para otra baseUrl o varias instancias:
 const data = createPublicBusinessData({ baseUrl: 'http://localhost:8080' })
 await data.sunatExchangeRate.lastYears(5)
+await data.bcrpExchangeRate.lastYears(5)
 ```
 
 **`getSunatRateYears(yearsAgo)` — la lectura masiva.** Dos decisiones:
@@ -402,7 +429,7 @@ corresponde cuando el usuario puede sobrescribir un día.
 public-business-data/
 ├── PLAN.md                    este archivo
 ├── config.example.toml        plantilla; config.toml no se versiona
-├── deploy.sh                  deploy | token | dry-run | backfill | invoke | logs
+├── deploy.sh                  deploy | token | dry-run | backfill | backfill-bcrp | invoke | logs
 ├── README.md                  qué es, cómo se consume            [pendiente]
 ├── AGENTS.md + CLAUDE.md      convenciones                       [pendiente]
 ├── data/
@@ -412,13 +439,13 @@ public-business-data/
 │   ├── binfmt/                formato binario + gzip + FNV        ✅ 5 tests
 │   ├── manifest/              archivo maestro de hashes           ✅
 │   ├── config/                config.toml + env + PAT desde SSM   ✅
-│   ├── sources/               SUNAT oficial + espejo mensual      ✅
+│   ├── sources/               SUNAT oficial + espejo, y BCRP      ✅ 6 tests
 │   ├── github/                cliente Git Data API                ✅
-│   ├── publish/               la decisión de commitear o no       ✅ 10 tests
-│   ├── cmd/backfill/          siembra docs/ desde el snapshot     ✅
+│   ├── publish/               la decisión de commitear o no       ✅ 12 tests
+│   ├── cmd/backfill/          siembra docs/: snapshot o API       ✅
 │   ├── cmd/updater/           handler Lambda + modo CLI           ✅
 │   └── cloud/template.yml     CloudFormation                      ✅
-└── clients/typescript/        paquete npm                         ✅ 15 tests
+└── clients/typescript/        paquete npm                         ✅ 55 tests
 ```
 
 ---
@@ -470,3 +497,209 @@ Después de eso, `./deploy.sh` compila, sube y crea el stack.
 - **SUNAT publica el cierre de la SBS del día hábil anterior**, no la cotización del propio día.
 - El portal `e-consulta.sunat.gob.pe` está detrás de un WAF con reCAPTCHA y rechaza peticiones
   automatizadas; por eso el volumen histórico viene del espejo y no de ahí.
+
+---
+
+## 11. Segundo dataset — el tipo de cambio de mercado (BCRP)
+
+SUNAT publica un **valor contable**: el promedio del sistema bancario que calcula la SBS, referido
+al día hábil anterior. Es lo que pide la norma para facturar, para los libros y para la diferencia
+de cambio, y no es a lo que nadie compra dólares. El precio de mercado es otro, y el único que una
+API pública del Estado peruano publica es el **interbancario del BCRP**: a lo que los bancos se
+compran y se venden dólares entre sí.
+
+| para | qué serie | por qué |
+| --- | --- | --- |
+| Facturación, libros, diferencia de cambio | SUNAT / SBS | Es la que nombra la norma |
+| Seguir el mercado, el dólar mayorista | Interbancario BCRP | Es el precio al que se operó |
+| Comprar o vender dólares de verdad | Ninguna | Ese lleva el spread del banco o de la casa de cambio y no se publica |
+
+Por eso son **dos datasets y dos familias de funciones**, no un parámetro de una sola: comparten
+el formato binario byte por byte, pero no significan lo mismo, y un `getRate(fuente)` invitaría a
+elegir la fuente por descarte en vez de por criterio.
+
+### 11.1 La fuente: BCRPData
+
+```
+https://estadisticas.bcrp.gob.pe/estadisticas/series/api/{series}/{formato}/{desde}/{hasta}
+```
+
+Sin API key y sin registro. Hasta 10 series por llamada, unidas con guion, así que compra y venta
+viajan en un solo request. Series diarias USD/PEN:
+
+| serie | qué es |
+| --- | --- |
+| `PD04637PD` / `PD04638PD` | **Interbancario compra / venta** — el que se publica aquí |
+| `PD04645PD` / `PD04646PD` | Cierre 13:30 compra / venta |
+| `PD04639PD` / `PD04640PD` | Sistema bancario SBS — lo que SUNAT republica al día siguiente |
+
+### 11.2 Tres trampas, medidas contra la API en vivo
+
+- **El rango tiene que ir en `YYYY-MM-DD`.** La documentación del BCRP describe una forma año-mes
+  (`2026-8`), que es la de las series *mensuales*. Pedida sobre una serie diaria, la API responde
+  **200, con el esqueleto de días correcto y todos los valores en `n.d.`** — o la bloquea el WAF.
+  Medido en siete intentos espaciados un minuto: seis bloqueados, uno vacío, ninguno con datos;
+  los mismos rangos en `YYYY-MM-DD` respondieron con valores siempre. Es el peor fallo posible
+  para un proceso desatendido, porque parece exitoso y guardaría una serie vacía.
+- **Incapsula responde el challenge con status 200 y cuerpo HTML.** El código de estado no sirve
+  como detección: `sources.isChallenge` mira el cuerpo, y el error resultante es reintentable en
+  vez de aparecer como "respuesta inesperada" del decodificador JSON. Hace falta además un
+  User-Agent de navegador; con el del proyecto el challenge es sistemático.
+- **Las fechas son `03.Ago.26`.** Mes abreviado en español —septiembre es `Set`, no `Sep`— y año
+  de dos dígitos. El siglo se resuelve contra la ventana pedida y no contra una constante, para
+  que un `94` sea 1994 en una petición de los noventa en vez de convertirse en 2094 en silencio.
+
+### 11.3 Precisión y cadencia
+
+El interbancario llega con catorce decimales porque es un promedio ponderado, y el propio `config`
+de la respuesta declara la serie con `dec: 3`. Redondear a 3 es fiel a la fuente y encaja con
+`binfmt.Scale = 1000` sin tocar el formato. (El cierre 13:30 declara `dec: 4`: si algún día se
+publica, o cambia la escala de ese dataset o pierde un decimal. Por eso no está.)
+
+El BCRP publica el interbancario con **un par de días hábiles de retraso**, así que el último día
+del dataset va por detrás del de SUNAT — al sembrarlo, SUNAT llegaba al 2026-09-21 y el BCRP al
+2026-09-17. No necesita una cadencia propia: cada corrida vuelve a pedir el mes en curso completo,
+igual que el espejo de SUNAT, y el hueco se llena solo en la siguiente.
+
+Si el BCRP falla, la corrida **no falla**: se loguea y se publica sólo SUNAT. Lo contrario
+retendría un dato que sí llegó por culpa de otro que no.
+
+### 11.4 Lo que cambió en el código
+
+- `sources/bcrp.go` — el fetcher, con las tres trampas de §11.2 resueltas y 6 tests.
+- `sources/sources.go` — `get` toma el User-Agent como parámetro, el backoff se comparte en
+  `getWithRetry`, y `isChallenge` detecta el HTML del WAF.
+- `manifest.NewDataset(key)` reemplaza a `NewExchangeRateDataset()`: una descripción por clave, en
+  vez de un constructor por serie.
+- `publish.Run` toma `[]Update` en vez de un solo `[]DailyRate`, y las dos series viajan **en un
+  único commit**. Partirlo en dos dejaría un instante en el que el manifest publicado nombra el
+  hash nuevo de una serie y el viejo de la otra.
+- `cmd/backfill` toma `-dataset sunat|bcrp` y **funde** su dataset en el `manifest.json` que ya
+  haya en `docs/` en vez de reescribirlo: sembrar el segundo no puede borrar el primero.
+- El cliente: `ExchangeRate` es ahora una clase parametrizada por la clave del dataset, con
+  `SunatExchangeRate` y `BcrpExchangeRate` encima. Las dos comparten `ManifestStore`, así que una
+  página que muestre ambas pide `manifest.json` una sola vez.
+- El sitio: selector de serie en la muestra, y la pestaña de integración documenta las dos.
+
+---
+
+## 12. Días provisionales — rellenar la cola sin ensuciar la serie
+
+El retraso del BCRP (§11.3) deja sin dato justo los días por los que más se pregunta. La cola de
+la serie se rellena con un tipo de referencia, **marcado**, hasta que llega el real.
+
+### 12.1 Por qué no Yahoo Finance
+
+Fue la primera opción y se descartó **midiéndola**. Sus barras diarias de `PEN=X` contra el
+interbancario del propio dataset:
+
+| día | BCRP (medio) | Yahoo | error |
+| --- | --- | --- | --- |
+| 2026-09-10 | 3,3710 | 3,2497 | −3,6 % |
+| 2026-09-14 | 3,3800 | 3,2570 | −3,6 % |
+| 2026-09-15 | 3,3755 | 3,2523 | −3,6 % |
+| 2026-09-16 | 3,3660 | 3,3560 | −0,3 % |
+| 2026-09-17 | 3,3630 | 3,2745 | −2,6 % |
+
+No es un sesgo corregible: oscila sin patrón y además emite barras en domingo. Comprobado en
+`query1` y `query2`, con `PEN=X` y con `USDPEN=X`. Su `regularMarketPrice` en vivo sí es
+razonable, pero sólo existe para el instante actual y no sirve para rellenar tres días atrás.
+
+La fuente elegida es **`@fawazahmed0/currency-api` por jsDelivr**: sin key, y —lo que decide— con
+URL fechada. Medida contra el BCRP en seis días hábiles se queda en **±0,5 % (±1,5 céntimos)**,
+consistente. Responde 404 limpio en fechas que no cubre, y su campo `date` confirma la fecha
+pedida, que es lo que permite detectar que el CDN resolvió la etiqueta a `latest`.
+
+### 12.2 Las reglas
+
+1. **Sólo donde el BCRP no tiene dato.** En la misma corrida y en las siguientes, el valor real
+   gana siempre.
+2. **Máximo 3 días hábiles hacia atrás** (`publish.ProvisionalWindow`), contando desde hoy y
+   saltando sábados y domingos: el interbancario no opera y rellenar un sábado crearía un día que
+   el BCRP no puede confirmar nunca.
+3. **Caducan.** Un provisional que el BCRP nunca confirma —un feriado peruano en el que el mercado
+   global sí operó— se **borra** al salir de la ventana. Sin esta regla, cada feriado dejaría un
+   día aproximado incrustado en la serie para siempre.
+
+El invariante que sale de las tres: **todo día más viejo que la ventana viene de la fuente del
+dataset y de nadie más.**
+
+La caducidad se implementa sin estado extra: `Update.Provisional` es *toda* la verdad de cada
+corrida, y `mergeYear` empieza borrando lo que el manifest anterior declaraba provisional. Lo que
+no se vuelva a entregar, desaparece. Por eso la ventana de consulta al BCRP llega como mínimo 10
+días atrás (`cmd/updater`): un provisional del día 1 tiene que seguir dentro del rango que puede
+confirmarlo el día 2, aunque haya cambiado el mes.
+
+### 12.3 Dónde vive el flag
+
+En el **manifest**, no en los registros — una sección propia, con los días como `unixDay`:
+
+```jsonc
+"provisional": {
+  "bcrp-interbancario-usd-pen": [20714]
+}
+```
+
+Va al nivel de arriba y no dentro del dataset para que una entrada de dataset siga siendo
+exactamente "años → archivos" y nada más. La prosa que la acompaña —de dónde sale el relleno y por
+qué no sirve para efectos tributarios— la pone el cliente (`PROVISIONAL_DESCRIPTION` en
+`descriptions.ts`), igual que el resto de las descripciones que salieron del manifest en v2, así
+que `describe().provisional` sigue devolviendo `source`, `sourceUrl`, `note` y `dates` en ISO.
+
+Un byte por registro habría costado el **10 % de cada archivo para siempre** para marcar como
+mucho tres días, y habría roto todos los decodificadores escritos contra el formato de 10 bytes.
+El manifest lo descarga todo cliente de todas formas, así que la lista viaja gratis. La sección se
+omite cuando no hay ninguno, que es el estado normal.
+
+El cliente estampa `provisional: true` al leer, cruzando el payload con esa lista. Se hace ahí y
+no dentro de `RateYear` porque las dos cosas se mueven por separado: un día provisional que el
+BCRP confirme con exactamente el mismo valor deja el payload —y su hash, y el año cacheado—
+intactos mientras el flag desaparece.
+
+### 12.4 Compra y venta
+
+La fuente de referencia cotiza **un solo número**. Los dos que necesita un registro salen de
+repartir a su alrededor el **spread mediano de los días reales** de la serie (`MedianSpread` +
+`WithSpread`); con spread impar, la milésima suelta va al lado de la venta, que es el que nunca
+subestima lo que paga quien compra. Sin días reales que medir, el medio queda a ambos lados en vez
+de inventarse una anchura.
+
+### 12.5 Superficie nueva
+
+- `sources.FetchProvisionalMid` — un día de la fuente de referencia; `ErrNotPublished` para el 404.
+- `publish.MissingWeekdays` / `MedianSpread` / `WithSpread` / `ProvisionalWindow` — las reglas,
+  puras y con tests propios.
+- `Update.Provisional`, `DatasetReport.ProvisionalDates`, `manifest.Provisional`.
+- Cliente: `IExchangeRateDay.provisional`, `getBcrpLastConfirmedDate()`, y un tercer array
+  `provisional: boolean[31]` en `monthArrays` — la forma que se vuelca en una tabla financiera es
+  justo donde un valor aproximado llegaría si no como un número más.
+- Sitio: la cotización de relleno se pinta en ámbar y en cursiva, con un chip que dice cuántas hay.
+
+---
+
+## 13. Manifest v2 — el índice deja de ser un documento
+
+El formato publicado está en §3. Lo que este apartado guarda es por qué cambió y qué cuesta.
+
+**El problema.** v1 repetía en cada publicación ~600 bytes de prosa por dataset (`title`, `source`,
+`sourceUrl`, `unit`, `record`, `scale`, `hashAlgo`) y cinco líneas por año. Nada de eso cambia
+salvo cuando cambia este repositorio, y sin embargo lo redescargaba cada visitante en cada fallo de
+la ventana de caché. El manifest no es documentación: es el índice que contesta *"¿qué años hay y
+cuál se movió?"*.
+
+**El cambio.** Los años cuelgan directo del dataset (`datasets[clave][año]`), cada uno con tres
+claves de una letra (`h`, `r`, `d`), y `d` viaja como `unixDay` en vez de ISO. 3 139 → 899 bytes.
+
+**Dónde fue la prosa.** A `clients/typescript/src/descriptions.ts`, que el cliente vuelve a pegar
+en `expand()` al cargar el manifest. La API pública no se movió: `describe()` sigue devolviendo
+`title`, `unit`, `scale` y `files[año].lastDate` en ISO. Un dataset que el manifest nombre y esa
+tabla no tenga recibe una descripción neutra en vez de un error, para que un bundle viejo pueda
+listar una serie nueva.
+
+**Migrar es re-sembrar.** `manifest.Unmarshal` y el `expand()` del cliente fallan ante cualquier
+versión que no sea la suya, en las dos direcciones (§3), y `cmd/backfill` funde su dataset en el
+manifest que encuentra, así que tampoco puede leer el viejo. Para subir la publicación de v1 a v2:
+borrar `docs/manifest.json` y sembrar **los dos** datasets —`./deploy.sh backfill` y
+`./deploy.sh backfill-bcrp`—, porque el que no se siembre no estará en el índice. Los `.gz` no
+cambian (el layout binario es el mismo), así que la única diferencia real del commit es
+`manifest.json`.

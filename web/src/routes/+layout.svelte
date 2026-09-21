@@ -37,9 +37,13 @@
   // único que hay dentro, y un handler en el contenedor sería un gesto sólo de ratón.
   afterNavigate(() => { menuOpen = false })
 
-  /** Los datasets publicados. Por ahora uno; la lista existe para que el segundo sea una fila. */
+  /**
+   * Una fila por página, no por dataset: las dos series de tipo de cambio comparten página y se
+   * eligen con el selector de la muestra, porque la pregunta que responden es la misma y lo que
+   * cambia es quién la contesta. Un dataset de otra cosa sí sería una fila más.
+   */
   const datasets = [
-    { href: '/', code: 'TC', name: 'Tipo de Cambio', detail: 'SUNAT · USD/PEN' },
+    { href: '/', code: 'TC', name: 'Tipo de Cambio', detail: 'SUNAT y BCRP · USD/PEN' },
   ]
 
   const isCurrent = (href: string) => page.url.pathname === `${base}${href}`

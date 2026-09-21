@@ -60,9 +60,35 @@ execSync("go mod download", { stdio: "inherit", shell: true, cwd: updaterPath })
 
 // El dev server sirve docs/ como carpeta de assets, así que sin manifest la página arranca
 // vacía y sin decir por qué. Sembrarlo es una orden que ya existe.
-if (!fs.existsSync(path.join(docsPath, "manifest.json"))) {
+const manifestPath = path.join(docsPath, "manifest.json")
+
+// La versión del manifest que escribe esta build: manifest.Version en Go y MANIFEST_VERSION en el
+// cliente. Un docs/ de antes del cambio de formato no se lee a medias, se vuelve a sembrar — y
+// entero, porque backfill funde un dataset a la vez y el que no se siembre no estaría en el índice.
+const MANIFEST_VERSION = 2
+let staleFormat = false
+if (fs.existsSync(manifestPath)) {
+  const published = JSON.parse(fs.readFileSync(manifestPath, "utf8")).version
+  if (published !== MANIFEST_VERSION) {
+    console.log(`docs/manifest.json es versión ${published} y esta build escribe la ${MANIFEST_VERSION}. Re-sembrando...`)
+    fs.rmSync(manifestPath)
+    staleFormat = true
+  }
+}
+
+if (staleFormat || !fs.existsSync(manifestPath)) {
   console.log("docs/ está sin datos. Sembrando desde data/ con el codificador actual...")
-  execSync("go run ./cmd/backfill -source ../data/tipo-cambio-sunat-usd-pen.json -out ../docs", {
+  execSync("go run ./cmd/backfill -dataset sunat -source ../data/tipo-cambio-sunat-usd-pen.json -out ../docs", {
+    stdio: "inherit", shell: true, cwd: updaterPath,
+  })
+}
+
+// El BCRP no tiene snapshot en data/ porque su API sí responde el histórico. Se siembra aparte
+// para no pedirle nada a una red que puede no estar, y porque el manifest se completa igual:
+// backfill funde su dataset en el que ya haya en docs/ en vez de reemplazarlo.
+if (staleFormat || !fs.existsSync(path.join(docsPath, "bcrp-interbancario-usd-pen"))) {
+  console.log("Falta la serie del BCRP. Pidiéndosela a su API (un año por petición)...")
+  execSync("go run ./cmd/backfill -dataset bcrp -from 2021-01-01 -out ../docs", {
     stdio: "inherit", shell: true, cwd: updaterPath,
   })
 }

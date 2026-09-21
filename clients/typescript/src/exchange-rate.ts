@@ -1,19 +1,39 @@
 /**
- * The SUNAT exchange rate dataset: what a consumer actually calls. Years are downloaded lazily
- * and kept keyed by the manifest hash, so a year that has not changed is never fetched twice
- * and a year that did changes key on its own without touching the others.
+ * An exchange rate dataset: what a consumer actually calls. Years are downloaded lazily and kept
+ * keyed by the manifest hash, so a year that has not changed is never fetched twice and a year
+ * that did changes key on its own without touching the others.
+ *
+ * One class for every series, parameterized by the dataset key, because the two published today
+ * differ only in where their bytes live: same record layout, same scale, same caching. What they
+ * do not share is meaning — SUNAT's is the accounting rate the tax code points at, the BCRP's is
+ * the interbank rate the market actually traded at — and that is why they are separate datasets
+ * with separate functions instead of a flag on one.
  */
 
 import { RateYear, toDateString, toUnixDay, gunzip, type IExchangeRateDay } from './binfmt'
+import { BCRP_INTERBANCARIO_USD_PEN, SUNAT_USD_PEN } from './keys'
 import { filePath, type IManifestDataset, ManifestStore } from './manifest'
 
-/** The dataset key, which is also the folder its year files live in. */
-export const SUNAT_USD_PEN = 'sunat-usd-pen'
+export { BCRP_INTERBANCARIO_USD_PEN, SUNAT_USD_PEN }
 
 /** The longest month, and so how many slots a month of rates carries. */
 const DAYS_PER_MONTH_MAX = 31
 
-export class SunatExchangeRate {
+/** The years a dataset entry names, ascending. */
+function yearsOf(dataset: IManifestDataset): string[] {
+	return Object.keys(dataset.files).sort()
+}
+
+/** Where the series ends according to the manifest, without opening a single year file. */
+function lastDateOf(dataset: IManifestDataset): string | undefined {
+	let lastDate: string | undefined
+	for (const file of Object.values(dataset.files)) {
+		if (file.lastDate && (!lastDate || file.lastDate > lastDate)) lastDate = file.lastDate
+	}
+	return lastDate
+}
+
+export class ExchangeRate {
 	private readonly years = new Map<string, RateYear>()
 	/** Which manifest hash each decoded year came from — the test for "is my copy stale?". */
 	private readonly loadedHashes = new Map<string, string>()
@@ -23,28 +43,52 @@ export class SunatExchangeRate {
 	 */
 	private readonly loading = new Map<string, Promise<RateYear | undefined>>()
 
-	constructor(private readonly manifests: ManifestStore) {}
+	constructor(
+		private readonly manifests: ManifestStore,
+		readonly datasetKey: string,
+	) {}
 
 	/** What the manifest says about this dataset: source, unit, scale, years available. */
 	async describe(): Promise<IManifestDataset> {
 		const manifest = await this.manifests.get()
-		const dataset = manifest.datasets[SUNAT_USD_PEN]
-		if (!dataset) throw new Error(`el manifest no publica ${SUNAT_USD_PEN}`)
+		const dataset = manifest.datasets[this.datasetKey]
+		if (!dataset) throw new Error(`el manifest no publica ${this.datasetKey}`)
 		return dataset
 	}
 
 	/** The years published, ascending. */
 	async availableYears(): Promise<string[]> {
-		return Object.keys((await this.describe()).files).sort()
+		return yearsOf(await this.describe())
 	}
 
-	/** One day, or null when SUNAT published nothing that day — a holiday or a weekend. */
+	/**
+	 * Stamps the provisional flag, which lives in the manifest and not in the payload.
+	 *
+	 * The dataset entry is passed in rather than fetched here, and that is the whole reason these
+	 * methods read it once and thread it down: a second `describe()` inside the same call is free
+	 * while the manifest is inside its cache window, and a second HTTP request the moment someone
+	 * sets `setCache(0)`.
+	 */
+	private mark(days: IExchangeRateDay[], dataset: IManifestDataset): IExchangeRateDay[] {
+		const dates = dataset.provisional?.dates
+		if (!dates || dates.length === 0) return days
+
+		const flagged = new Set(dates.map(toUnixDay))
+		for (const day of days) {
+			if (flagged.has(day.unixDay)) day.provisional = true
+		}
+		return days
+	}
+
+	/** One day, or null when the source published nothing that day — a holiday or a weekend. */
 	async at(date: string): Promise<IExchangeRateDay | null> {
-		const year = await this.loadYear(date.slice(0, 4))
+		const dataset = await this.describe()
+		const year = await this.loadYear(date.slice(0, 4), dataset)
 		if (!year) return null
 
 		const index = year.indexOf(toUnixDay(date))
-		return index < 0 ? null : year.at(index)
+		if (index < 0) return null
+		return this.mark([year.at(index)], dataset)[0]!
 	}
 
 	/**
@@ -52,10 +96,14 @@ export class SunatExchangeRate {
 	 * the current one, so this still answers on the 1st of January before that day is published.
 	 */
 	async latest(): Promise<IExchangeRateDay | null> {
-		const years = await this.availableYears()
-		for (const yearKey of years.reverse()) {
-			const year = await this.loadYear(yearKey)
-			if (year && year.length > 0) return year.at(year.length - 1)
+		const dataset = await this.describe()
+		for (const yearKey of yearsOf(dataset).reverse()) {
+			const year = await this.loadYear(yearKey, dataset)
+			if (year && year.length > 0) {
+				// The last day is the likeliest one to be provisional: it is the one the real
+				// source has not caught up with yet.
+				return this.mark([year.at(year.length - 1)], dataset)[0]!
+			}
 		}
 		return null
 	}
@@ -70,17 +118,18 @@ export class SunatExchangeRate {
 		const toUnixDayValue = toUnixDay(to)
 		if (fromUnixDay > toUnixDayValue) return []
 
+		const dataset = await this.describe()
 		const yearKeys: string[] = []
 		for (let yearNumber = Number(from.slice(0, 4)); yearNumber <= Number(to.slice(0, 4)); yearNumber++) {
 			yearKeys.push(String(yearNumber))
 		}
-		const years = await Promise.all(yearKeys.map((yearKey) => this.loadYear(yearKey)))
+		const years = await Promise.all(yearKeys.map((yearKey) => this.loadYear(yearKey, dataset)))
 
 		const days: IExchangeRateDay[] = []
 		for (const year of years) {
 			if (year) days.push(...year.slice(fromUnixDay, toUnixDayValue))
 		}
-		return days
+		return this.mark(days, dataset)
 	}
 
 	/**
@@ -114,12 +163,36 @@ export class SunatExchangeRate {
 	 * downloaded to know where the series ends.
 	 */
 	async lastPublishedDate(): Promise<string | undefined> {
+		return lastDateOf(await this.describe())
+	}
+
+	/**
+	 * The last day that came from the dataset's own source — the last one you can rely on.
+	 *
+	 * Different from `lastPublishedDate` only while a fill is in place: that one answers "hasta
+	 * dónde llega la serie" contando los provisionales, and this one "hasta dónde llega el dato
+	 * confirmado". While nothing is filled — the normal state — the two agree and neither
+	 * downloads a year file.
+	 */
+	async lastConfirmedDate(): Promise<string | undefined> {
 		const dataset = await this.describe()
-		let lastDate: string | undefined
-		for (const file of Object.values(dataset.files)) {
-			if (file.lastDate && (!lastDate || file.lastDate > lastDate)) lastDate = file.lastDate
+		const flagged = new Set(dataset.provisional?.dates ?? [])
+
+		const lastDate = lastDateOf(dataset)
+		if (!lastDate || !flagged.has(lastDate)) return lastDate
+
+		// The tail is provisional, so the answer is a day the manifest does not name and only the
+		// payload knows. Walking back from the end of the last non-empty year finds it exactly,
+		// without assuming which calendar days the series happens to have.
+		for (const yearKey of yearsOf(dataset).reverse()) {
+			const year = await this.loadYear(yearKey, dataset)
+			if (!year) continue
+			for (let index = year.length - 1; index >= 0; index--) {
+				const date = toDateString(year.unixDayAt(index))
+				if (!flagged.has(date)) return date
+			}
 		}
-		return lastDate
+		return undefined
 	}
 
 	/**
@@ -131,9 +204,16 @@ export class SunatExchangeRate {
 	 *
 	 * @param month 1 = January.
 	 */
-	async monthArrays(year: number, month: number): Promise<{ buy: number[]; sell: number[] }> {
+	async monthArrays(
+		year: number,
+		month: number,
+	): Promise<{ buy: number[]; sell: number[]; provisional: boolean[] }> {
 		const buy = new Array<number>(DAYS_PER_MONTH_MAX).fill(0)
 		const sell = new Array<number>(DAYS_PER_MONTH_MAX).fill(0)
+		// The third array is not decoration: this is the shape that gets fed straight into a
+		// finance table, and it is the one place where an approximate rate would otherwise arrive
+		// as a bare number with nothing left to say it is not confirmed.
+		const provisional = new Array<boolean>(DAYS_PER_MONTH_MAX).fill(false)
 
 		const monthStart = `${year}-${String(month).padStart(2, '0')}`
 		// Day 0 of the next month is the last day of this one.
@@ -143,16 +223,16 @@ export class SunatExchangeRate {
 			const dayOfMonth = Number(day.date.slice(8, 10))
 			buy[dayOfMonth - 1] = day.buyScaled
 			sell[dayOfMonth - 1] = day.sellScaled
+			provisional[dayOfMonth - 1] = day.provisional
 		}
-		return { buy, sell }
+		return { buy, sell, provisional }
 	}
 
 	/**
 	 * Loads a year, from memory, then from the persistent cache, then from the network. The
 	 * manifest hash is the whole cache protocol: a year keeps its bytes until its hash moves.
 	 */
-	private async loadYear(yearKey: string): Promise<RateYear | undefined> {
-		const dataset = await this.describe()
+	private async loadYear(yearKey: string, dataset: IManifestDataset): Promise<RateYear | undefined> {
 		const entry = dataset.files[yearKey]
 		if (!entry) return undefined
 
@@ -169,7 +249,7 @@ export class SunatExchangeRate {
 	}
 
 	private async fetchYear(yearKey: string, hash: string, records: number): Promise<RateYear> {
-		const path = filePath(SUNAT_USD_PEN, yearKey)
+		const path = filePath(this.datasetKey, yearKey)
 		const cacheKey = this.manifests.fileKey(path, hash)
 		const store = await this.manifests.cache()
 
@@ -193,6 +273,28 @@ export class SunatExchangeRate {
 		this.years.set(yearKey, year)
 		this.loadedHashes.set(yearKey, hash)
 		return year
+	}
+}
+
+/**
+ * The rate SUNAT publishes: the SBS system average of the previous business day, and the one the
+ * tax code points at for invoicing, books and year-end translation.
+ */
+export class SunatExchangeRate extends ExchangeRate {
+	constructor(manifests: ManifestStore) {
+		super(manifests, SUNAT_USD_PEN)
+	}
+}
+
+/**
+ * The BCRP's interbank rate: what banks actually traded dollars at, which is the closest thing to
+ * a market price any Peruvian public API publishes. Two things to expect from it — it is *not*
+ * what you pay at a bank or a casa de cambio, which adds its own spread, and BCRPData posts it
+ * with a couple of business days' lag, so its last day is usually behind SUNAT's.
+ */
+export class BcrpExchangeRate extends ExchangeRate {
+	constructor(manifests: ManifestStore) {
+		super(manifests, BCRP_INTERBANCARIO_USD_PEN)
 	}
 }
 

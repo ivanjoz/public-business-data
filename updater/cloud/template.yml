@@ -36,7 +36,9 @@ Parameters:
     Description: 0 = el mes corriente completo, que repara los huecos de una corrida fallida.
   Schedule:
     Type: String
-    Description: Cadencia del EventBridge. SUNAT publica temprano; 3 intentos cubren el retraso.
+    Description: >-
+      Cadencia del EventBridge, en UTC. Por defecto una corrida por hora de 06:15 a 20:15 de Lima;
+      lo que evita que sea un poll agresivo es la compuerta del hash, no la frecuencia.
 
 Resources:
   # Rol propio y no el serverlessCloud compartido: aquel es amplísimo y aun así no puede leer

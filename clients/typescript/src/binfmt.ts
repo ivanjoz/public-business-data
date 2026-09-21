@@ -27,6 +27,15 @@ export interface IExchangeRateDay {
 	buyScaled: number
 	/** Sell rate × 1000: 3362. */
 	sellScaled: number
+	/**
+	 * True when this day did not come from the dataset's own source but from the reference fill,
+	 * because the real source had not published it yet. Measured error against the BCRP: ±0,5 %.
+	 *
+	 * Never use a provisional day for anything that has to be right — invoicing, books, a
+	 * settlement. It is overwritten by the real value as soon as it lands, and deleted if it never
+	 * does. `describeBcrpExchangeRate().provisional` says where it came from.
+	 */
+	provisional: boolean
 }
 
 /** '2026-09-18' → 20714. Parsed as UTC so a local timezone can never shift the day. */
@@ -75,6 +84,11 @@ export class RateYear {
 		return this.view.getInt16(index * RECORD_SIZE, true)
 	}
 
+	/**
+	 * The record at a position. `provisional` is always false here: the payload does not carry the
+	 * flag — it is a handful of dates in the manifest, not a byte per record — so it is the dataset
+	 * that stamps it after reading. See ExchangeRate.
+	 */
 	at(index: number): IExchangeRateDay {
 		const offset = index * RECORD_SIZE
 		const unixDay = this.view.getInt16(offset, true)
@@ -87,6 +101,7 @@ export class RateYear {
 			sell: sellScaled / SCALE,
 			buyScaled,
 			sellScaled,
+			provisional: false,
 		}
 	}
 

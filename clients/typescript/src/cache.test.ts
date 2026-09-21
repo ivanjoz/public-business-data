@@ -136,7 +136,7 @@ describe('ventana de caché', () => {
 		const changed = docsFetch({
 			'manifest.json': () => {
 				const manifest = JSON.parse(readFileSync())
-				manifest.datasets[SUNAT_USD_PEN].files['2026'].hash = 'hashnuevo'
+				manifest.datasets[SUNAT_USD_PEN]['2026'].h = 'hashnuevo'
 				return new Response(JSON.stringify(manifest), { status: 200 })
 			},
 		})

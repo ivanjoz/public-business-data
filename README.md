@@ -4,8 +4,17 @@ Datos públicos de negocio publicados como archivos binarios comprimidos y está
 **https://public-business-data.un.pe**. Sin API, sin servidor, sin rate limit: son archivos en
 GitHub Pages con `Access-Control-Allow-Origin: *`.
 
-Dataset actual: **tipo de cambio oficial SUNAT USD/PEN**, compra y venta, serie diaria desde
-2021. Seis años completos pesan **9,2 KB**.
+Dos datasets, ambos USD/PEN, compra y venta, serie diaria desde 2021:
+
+| dataset | qué es | para qué sirve | peso |
+| --- | --- | --- | --- |
+| `sunat-usd-pen` | El tipo de cambio oficial de SUNAT: el cierre SBS del día hábil anterior | Facturación, libros contables, diferencia de cambio | 9,2 KB |
+| `bcrp-interbancario-usd-pen` | El interbancario del BCRP: a lo que los bancos se compran y venden dólares entre sí | Seguir el mercado, el dólar mayorista | 7,8 KB |
+
+Los dos **casi nunca coinciden al céntimo el mismo día**, y es correcto que no lo hagan: miden
+cosas distintas y SUNAT va un día por detrás del cierre SBS. Ninguno de los dos es el precio al
+que se compran dólares en un banco o en una casa de cambio — ese lleva el spread del operador y
+no lo publica nadie.
 
 Diseño y decisiones: [PLAN.md](PLAN.md).
 
@@ -63,6 +72,10 @@ es una opción válida.
 El import es estático y las funciones son `async`, porque los datos se descargan en el primer
 uso. **Importar el módulo no dispara nada**: ni una petición, ni abrir IndexedDB.
 
+Cada dataset tiene su propia familia de funciones — `getSunat…` y `getBcrp…` — porque nombran
+fuentes distintas y no dos vistas del mismo número. Lo que sigue es la de SUNAT; la del BCRP es
+idéntica y está [más abajo](#el-tipo-de-cambio-de-mercado-getbcrp).
+
 ```ts
 import {
   getSunatRate, getLatestSunatRate, getSunatRateRange, getSunatRateYears,
@@ -72,7 +85,8 @@ import {
 } from '@ivanjoz/public-business-data'
 
 await getSunatRate('2026-09-20')
-// { date: '2026-09-20', unixDay: 20716, buy: 3.354, sell: 3.362, buyScaled: 3354, sellScaled: 3362 }
+// { date: '2026-09-20', unixDay: 20716, buy: 3.354, sell: 3.362,
+//   buyScaled: 3354, sellScaled: 3362, provisional: false }
 // null si SUNAT no publicó ese día (feriado o fin de semana)
 
 await getSunatRateYears(5)                       // BULK: los últimos 5 años, ~1 800 días
@@ -122,13 +136,79 @@ mano al guardar es justo donde aparecen los errores de redondeo.
 `getSunatMonthArrays` devuelve 31 slots con `0` donde no hay cotización — exactamente la forma y la
 escala de `DetailBuyRate` / `DetailSellRate` en `finance.ExchangeRate` de genix.
 
+### El tipo de cambio de mercado: `getBcrp…`
+
+Las mismas ocho funciones con otro prefijo, sobre el interbancario del BCRP (series diarias
+`PD04637PD` y `PD04638PD`):
+
+```ts
+import { getBcrpRate, getLatestBcrpRate, getBcrpRateYears } from '@ivanjoz/public-business-data'
+
+await getBcrpRate('2026-09-17')
+// { date: '2026-09-17', buy: 3.362, sell: 3.364, buyScaled: 3362, sellScaled: 3364 }
+// null si el mercado no operó ese día
+
+await getBcrpRateYears(5)              // BULK, igual que el de SUNAT
+await getBcrpLastPublishedDate()       // '2026-09-17'
+```
+
+Dos cosas que hay que saber antes de usarlo:
+
+- **El BCRP lo publica con un par de días hábiles de retraso**, así que su último día va por
+  detrás del de SUNAT. No hay "el interbancario de hoy" en ninguna API pública del Estado; lo más
+  reciente que existe es el oficial de SUNAT, que es el cierre SBS del día hábil anterior.
+- **No sirve para efectos tributarios.** Para IGV, libros y diferencia de cambio la norma apunta
+  a SUNAT/SBS, no al interbancario.
+
+El interbancario sólo existe los días en que el mercado operó: unos 250 al año, sin fines de
+semana ni feriados.
+
+### Días provisionales
+
+Para que la cola de la serie no quede vacía durante ese retraso, **los últimos hasta 3 días
+hábiles que el BCRP aún no publica se rellenan** con un tipo de referencia
+(`@fawazahmed0/currency-api`), y llegan marcados:
+
+```ts
+const day = await getBcrpRate('2026-09-18')
+day?.provisional      // true → es relleno, no es el interbancario
+
+const { buy, provisional } = await getBcrpMonthArrays(2026, 9)
+provisional[17]       // true si el día 18 es de relleno
+
+await getBcrpLastPublishedDate()   // '2026-09-18' — hasta dónde llega la serie
+await getBcrpLastConfirmedDate()   // '2026-09-17' — hasta dónde llega el dato del BCRP
+
+;(await describeBcrpExchangeRate()).provisional
+// { source, sourceUrl, note, dates: ['2026-09-18'] }
+```
+
+Las reglas, que son lo que hace el mecanismo seguro:
+
+| regla | qué significa |
+| --- | --- |
+| El BCRP siempre gana | Cuando publica el día, su valor sobrescribe al de relleno y el flag desaparece |
+| Máximo 3 días hábiles | Nunca se rellena más atrás, ni un sábado ni un domingo |
+| Caducan | Un día que el BCRP nunca confirma — un feriado peruano — se **borra** al salir de la ventana, en vez de quedarse en la serie para siempre |
+
+Es decir: **todo día más viejo que esos 3 días hábiles viene del BCRP y de nadie más.**
+
+Un valor provisional tiene un error medido de **±0,5 % (±1,5 céntimos)** contra el interbancario,
+y `buy`/`sell` se reparten alrededor del valor de referencia usando el spread mediano de los días
+reales — la fuente cotiza un solo número. **No lo uses para facturar, para libros ni para una
+liquidación.** El flag existe para eso; comprobarlo cuesta una propiedad.
+
 Para varias instancias o un origen distinto, está la clase:
 
 ```ts
 import { createPublicBusinessData } from '@ivanjoz/public-business-data'
 const data = createPublicBusinessData({ baseUrl: 'http://localhost:8080', cacheMinutes: 5 })
 await data.sunatExchangeRate.latest()
+await data.bcrpExchangeRate.latest()
 ```
+
+Las dos series comparten el `ManifestStore`, así que una página que muestre ambas pide el
+`manifest.json` una sola vez y baja sólo los años que abra de cada una.
 
 ---
 
@@ -167,16 +247,48 @@ hoy".
 
 ## Los datos directamente
 
-Si no quieres el cliente, el formato está documentado en el propio manifest:
+Si no quieres el cliente, son dos `curl`:
 
 ```bash
 curl https://public-business-data.un.pe/manifest.json
 curl -s https://public-business-data.un.pe/sunat-usd-pen/2026.gz | gunzip | xxd | head
+curl -s https://public-business-data.un.pe/bcrp-interbancario-usd-pen/2026.gz | gunzip | xxd | head
 ```
 
-Cada registro son **10 bytes, little endian**: `unixDay:int16, buy:int32, sell:int32`, con las
-cotizaciones ×1000 y ordenados ascendentemente por día. Un día ausente significa que SUNAT no
-publicó.
+Los dos datasets comparten formato: cada registro son **10 bytes, little endian**
+(`unixDay:int16, buy:int32, sell:int32`), con las cotizaciones ×1000 y ordenados ascendentemente
+por día. `unixDay` es días desde 1970-01-01. Un día ausente significa que la fuente no publicó.
+
+El `manifest.json` es un índice y nada más — no se autodescribe, porque esa descripción serían los
+mismos bytes redescargados por cada visitante en cada publicación para decir algo que sólo cambia
+cuando cambia este repositorio:
+
+```jsonc
+{
+  "version": 2,
+  "generated": 1789948262,                       // unix; última vez que los datos se movieron
+  "datasets": {
+    "sunat-usd-pen": {
+      "2026": {"h":"7da90ae37e84eae0","r":264,"d":20717}
+    }
+  },
+  "provisional": {                               // ausente cuando no hay ningún día de relleno
+    "bcrp-interbancario-usd-pen": [20714]
+  }
+}
+```
+
+| clave | qué es |
+| --- | --- |
+| `h` | hash FNV-1a-64 del payload **descomprimido**, en hexadecimal |
+| `r` | cuántos días trae el archivo |
+| `d` | el último día que cubre, como `unixDay` |
+| `provisional` | por dataset, los `unixDay` que no vienen de su propia fuente |
+
+La ruta no está porque es `{dataset}/{año}.gz`. `version` sube cuando el formato cambia: si no es
+la que tu código entiende, falla en vez de leerlo a medias. El cliente de TypeScript vuelve a
+pegar la descripción (`title`, `unit`, `scale`, `record`) al expandirlo, así que `describe()` sigue
+devolviéndola.
 
 > GitHub Pages sirve los `.gz` como `Content-Type: application/gzip` **sin**
 > `Content-Encoding: gzip`, así que el navegador entrega bytes gzip en crudo y hay que
@@ -189,9 +301,10 @@ publicó.
 ```bash
 node start.js           # web + tests del cliente + tests del updater, en una sola consola
 
-./deploy.sh dry-run     # qué publicaría el updater, sin commitear
-./deploy.sh backfill    # regenera docs/ desde data/ con el codificador actual
-./deploy.sh             # compila el updater a arm64 y despliega el stack
+./deploy.sh dry-run       # qué publicaría el updater, sin commitear
+./deploy.sh backfill      # regenera la serie de SUNAT desde data/ con el codificador actual
+./deploy.sh backfill-bcrp # regenera la serie del BCRP pidiéndosela a su API
+./deploy.sh               # compila el updater a arm64 y despliega el stack
 
 cd updater && go test ./...
 cd clients/typescript && bun install && bun run test && bun run build

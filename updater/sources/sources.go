@@ -1,12 +1,15 @@
-// Package sources fetches what SUNAT published. Two endpoints with different jobs: the .txt
-// on sunat.gob.pe is authoritative but only ever answers today, and the apis.net.pe mirror
-// answers a whole month at a time. The portal that would answer both, e-consulta.sunat.gob.pe,
-// sits behind a WAF with reCAPTCHA and rejects automated requests.
+// Package sources fetches what the publishers of each series put out.
+//
+// SUNAT (this file) needs two endpoints with different jobs: the .txt on sunat.gob.pe is
+// authoritative but only ever answers today, and the apis.net.pe mirror answers a whole month at
+// a time. The portal that would answer both, e-consulta.sunat.gob.pe, sits behind a WAF with
+// reCAPTCHA and rejects automated requests. The BCRP's market rate lives in bcrp.go.
 package sources
 
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -34,7 +37,7 @@ type DailyRate struct {
 // FetchToday reads the official file. It is the only authoritative endpoint reachable without
 // a browser, which is why its value wins over the mirror's for the same day.
 func FetchToday(ctx context.Context, client *http.Client) (DailyRate, error) {
-	body, err := get(ctx, client, SunatTodayURL)
+	body, err := get(ctx, client, SunatTodayURL, userAgent)
 	if err != nil {
 		return DailyRate{}, err
 	}
@@ -70,22 +73,7 @@ type mirrorDay struct {
 // costs the same single request as asking for two days and makes the update self-healing: a
 // run that was missed, or a day SUNAT later corrected, is picked up by the next run.
 func FetchMonth(ctx context.Context, client *http.Client, year int, month time.Month) ([]DailyRate, error) {
-	var body []byte
-	var err error
-
-	for attempt := range 4 {
-		if attempt > 0 {
-			select {
-			case <-time.After(time.Duration(attempt*attempt) * 2 * time.Second):
-			case <-ctx.Done():
-				return nil, ctx.Err()
-			}
-		}
-		body, err = get(ctx, client, fmt.Sprintf(MirrorMonthURL, int(month), year))
-		if err == nil {
-			break
-		}
-	}
+	body, err := getWithRetry(ctx, client, fmt.Sprintf(MirrorMonthURL, int(month), year), userAgent)
 	if err != nil {
 		return nil, err
 	}
@@ -122,12 +110,58 @@ func parseScaled(text string) (int32, error) {
 	return int32(value*1000 + 0.5), nil
 }
 
-func get(ctx context.Context, client *http.Client, url string) ([]byte, error) {
+// retryBaseDelay is the unit of the quadratic backoff: attempt n waits n² of it. A variable and
+// not a constant so the tests can exercise the retry without sleeping through half a minute.
+var retryBaseDelay = 2 * time.Second
+
+// getWithRetry is the shared transport for the two endpoints that answer a whole window at once.
+// Both of them fail transiently for their own reason — the SUNAT mirror rate-limits bursts with a
+// 429, the BCRP serves an Incapsula challenge — and both recover on a later attempt, so the
+// backoff is quadratic and the run only gives up after four tries.
+func getWithRetry(ctx context.Context, client *http.Client, url, agent string) ([]byte, error) {
+	var body []byte
+	var err error
+
+	for attempt := range 4 {
+		if attempt > 0 {
+			select {
+			case <-time.After(time.Duration(attempt*attempt) * retryBaseDelay):
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			}
+		}
+		body, err = get(ctx, client, url, agent)
+		if err == nil {
+			return body, nil
+		}
+		// A 4xx is the endpoint answering the question, not failing to: asking again changes
+		// nothing and only delays the run. The WAF challenge is a 200, so it is not caught here.
+		var status statusError
+		if errors.As(err, &status) && status.Code >= 400 && status.Code < 500 && status.Code != http.StatusTooManyRequests {
+			return nil, err
+		}
+	}
+	return nil, err
+}
+
+// statusError is what get returns when the endpoint answered something other than 200. A type and
+// not a formatted string because one caller has to tell a 404 apart from everything else.
+type statusError struct {
+	Code int
+	URL  string
+	Body string
+}
+
+func (e statusError) Error() string {
+	return fmt.Sprintf("%s respondió %d: %s", e.URL, e.Code, e.Body)
+}
+
+func get(ctx context.Context, client *http.Client, url, agent string) ([]byte, error) {
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return nil, err
 	}
-	request.Header.Set("User-Agent", userAgent)
+	request.Header.Set("User-Agent", agent)
 
 	response, err := client.Do(request)
 	if err != nil {
@@ -140,9 +174,22 @@ func get(ctx context.Context, client *http.Client, url string) ([]byte, error) {
 		return nil, err
 	}
 	if response.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("%s respondió %d: %s", url, response.StatusCode, truncate(string(body), 120))
+		return nil, statusError{Code: response.StatusCode, URL: url, Body: truncate(string(body), 120)}
+	}
+	// A WAF challenge comes back as 200 with an HTML body, so the status code cannot be the only
+	// check: without this, the JSON decoder is what would report the failure, and it would report
+	// it as "respuesta inesperada" instead of as the retryable block it is.
+	if isChallenge(body) {
+		return nil, fmt.Errorf("%s devolvió un challenge del WAF en vez de datos", url)
 	}
 	return body, nil
+}
+
+// isChallenge spots the HTML a WAF serves in place of the payload. Every endpoint here answers
+// JSON or a pipe-separated line, so a body that opens an HTML tag is never data.
+func isChallenge(body []byte) bool {
+	head := strings.ToLower(strings.TrimSpace(string(body)))
+	return strings.HasPrefix(head, "<!doctype html") || strings.HasPrefix(head, "<html")
 }
 
 func truncate(text string, limit int) string {

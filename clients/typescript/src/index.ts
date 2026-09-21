@@ -10,6 +10,16 @@
  *   setCache(30)                              // minutos antes de volver a mirar el manifest
  *   await getSunatRate('2026-09-20')               // { buy: 3.354, buyScaled: 3354, ... }
  *   await getSunatMonthArrays(2026, 9)             // { buy: number[31], sell: number[31] }
+ *   await getBcrpRate('2026-09-17')                // el interbancario del mismo día
+ *
+ * Two datasets, one function family each. SUNAT is the accounting rate — facturación, libros,
+ * diferencia de cambio — and the BCRP's interbank rate is the market one. Neither is what a bank
+ * or a casa de cambio charges: that price carries their spread and is not published anywhere.
+ *
+ * Because the BCRP publishes with a couple of business days' lag, the tail of its series may carry
+ * filled days from a reference source. Those come back with `provisional: true` and are replaced
+ * by the real value as soon as it lands. Check the flag before using a recent day for anything
+ * that has to be right.
  *
  * The import is static and the functions are async, because the data is downloaded on first
  * use. Nothing happens at import time: no request, no IndexedDB open, no work at all until a
@@ -17,7 +27,7 @@
  */
 
 import type { IExchangeRateDay } from './binfmt'
-import { SunatExchangeRate } from './exchange-rate'
+import { BcrpExchangeRate, SunatExchangeRate } from './exchange-rate'
 import {
 	DEFAULT_BASE_URL,
 	DEFAULT_CACHE_MINUTES,
@@ -29,10 +39,14 @@ import {
 export class PublicBusinessData {
 	readonly manifests: ManifestStore
 	readonly sunatExchangeRate: SunatExchangeRate
+	readonly bcrpExchangeRate: BcrpExchangeRate
 
 	constructor(options: IClientOptions = {}) {
 		this.manifests = new ManifestStore(options)
+		// Both datasets read through the same store, so the manifest is fetched once and a page
+		// that shows the two series pays for one request plus the year files it actually opens.
 		this.sunatExchangeRate = new SunatExchangeRate(this.manifests)
+		this.bcrpExchangeRate = new BcrpExchangeRate(this.manifests)
 	}
 
 	/** Minutes the manifest is trusted before being re-checked. */
@@ -187,14 +201,91 @@ export function getSunatLastPublishedDate(): Promise<string | undefined> {
  *
  * @param month 1 = January.
  */
-export function getSunatMonthArrays(year: number, month: number): Promise<{ buy: number[]; sell: number[] }> {
+export function getSunatMonthArrays(
+	year: number,
+	month: number,
+): Promise<{ buy: number[]; sell: number[]; provisional: boolean[] }> {
 	return instance().sunatExchangeRate.monthArrays(year, month)
 }
 
-export { SUNAT_USD_PEN, SunatExchangeRate } from './exchange-rate'
-export { DEFAULT_BASE_URL, DEFAULT_CACHE_MINUTES, ManifestStore } from './manifest'
+// ─── BCRP: el tipo de cambio de mercado ─────────────────────────────────────
+// El interbancario, que es el precio al que los bancos se compran y venden dólares entre sí.
+// Mismas funciones que la familia SUNAT, con dos diferencias que importan al usarlo: no sirve
+// para efectos tributarios —ahí la norma apunta a SUNAT/SBS— y el BCRP lo publica con un par de
+// días hábiles de retraso, así que su último día suele ir por detrás del de SUNAT.
+
+/** El dataset del BCRP visto desde el manifest: fuente, unidad, escala, años publicados. */
+export function describeBcrpExchangeRate(): Promise<IManifestDataset> {
+	return instance().bcrpExchangeRate.describe()
+}
+
+/** Los años publicados del interbancario, ascendente. */
+export function getBcrpAvailableYears(): Promise<string[]> {
+	return instance().bcrpExchangeRate.availableYears()
+}
+
+/** Un día del interbancario, o null si el mercado no operó — feriado, fin de semana. */
+export function getBcrpRate(date: string): Promise<IExchangeRateDay | null> {
+	return instance().bcrpExchangeRate.at(date)
+}
+
+/** El último día del interbancario que hay publicado. */
+export function getLatestBcrpRate(): Promise<IExchangeRateDay | null> {
+	return instance().bcrpExchangeRate.latest()
+}
+
+/** Todos los días del interbancario en [from, to], ambos incluidos. */
+export function getBcrpRateRange(from: string, to: string): Promise<IExchangeRateDay[]> {
+	return instance().bcrpExchangeRate.range(from, to)
+}
+
+/** Bulk: los últimos `yearsAgo` años de interbancario en una llamada, del más viejo al más nuevo. */
+export function getBcrpRateYears(yearsAgo: number): Promise<IExchangeRateDay[]> {
+	return instance().bcrpExchangeRate.lastYears(yearsAgo)
+}
+
+/**
+ * El último día que cubre el dataset del BCRP, contando los provisionales. Se lee del manifest:
+ * no baja ningún año.
+ */
+export function getBcrpLastPublishedDate(): Promise<string | undefined> {
+	return instance().bcrpExchangeRate.lastPublishedDate()
+}
+
+/** El último día que el BCRP confirmó — el último en el que se puede confiar sin reservas. */
+export function getBcrpLastConfirmedDate(): Promise<string | undefined> {
+	return instance().bcrpExchangeRate.lastConfirmedDate()
+}
+
+/**
+ * Un mes de interbancario como tres arrays de 31 slots: compra y venta ×1000 con 0 donde no hubo
+ * cotización, y `provisional[i]` en true donde el valor es de relleno y no del BCRP.
+ *
+ * @param month 1 = enero.
+ */
+export function getBcrpMonthArrays(
+	year: number,
+	month: number,
+): Promise<{ buy: number[]; sell: number[]; provisional: boolean[] }> {
+	return instance().bcrpExchangeRate.monthArrays(year, month)
+}
+
+export {
+	BCRP_INTERBANCARIO_USD_PEN,
+	BcrpExchangeRate,
+	ExchangeRate,
+	SUNAT_USD_PEN,
+	SunatExchangeRate,
+} from './exchange-rate'
+export { DEFAULT_BASE_URL, DEFAULT_CACHE_MINUTES, MANIFEST_VERSION, ManifestStore } from './manifest'
 export { RECORD_SIZE, SCALE, RateYear, gunzip, toDateString, toUnixDay } from './binfmt'
 export { MemoryStore, openCacheStore } from './cache'
 export type { IExchangeRateDay } from './binfmt'
 export type { ICacheStore } from './cache'
-export type { IClientOptions, IManifest, IManifestDataset, IManifestFile } from './manifest'
+export type {
+	IClientOptions,
+	IManifest,
+	IManifestDataset,
+	IManifestFile,
+	IManifestProvisional,
+} from './manifest'

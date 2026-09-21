@@ -1,47 +1,25 @@
 {
-  "version": 1,
-  "generated": 1789938961,
+  "version": 2,
+  "generated": 1789948262,
   "datasets": {
+    "bcrp-interbancario-usd-pen": {
+      "2021": {"h":"e88af8ca669d8de1","r":251,"d":18992},
+      "2022": {"h":"8f13290853bb6d2b","r":251,"d":19356},
+      "2023": {"h":"63ad89b1b2bd42ed","r":250,"d":19720},
+      "2024": {"h":"aa2ef09d6eb68397","r":246,"d":20087},
+      "2025": {"h":"843d4f53f5904c4c","r":248,"d":20453},
+      "2026": {"h":"4c984be6f7415b22","r":176,"d":20714}
+    },
     "sunat-usd-pen": {
-      "title": "Tipo de cambio oficial SUNAT — dólar estadounidense (compra y venta)",
-      "source": "SUNAT — Superintendencia Nacional de Aduanas y de Administración Tributaria (Perú)",
-      "sourceUrl": "https://www.sunat.gob.pe/a/txt/tipoCambio.txt",
-      "unit": "PEN por 1 USD",
-      "record": "unixDay:int16, buy:int32, sell:int32 — little endian, 10 bytes",
-      "scale": 1000,
-      "hashAlgo": "fnv-1a-64",
-      "files": {
-        "2021": {
-          "hash": "152e9f56c0e1c681",
-          "records": 280,
-          "lastDate": "2021-12-31"
-        },
-        "2022": {
-          "hash": "564466f9dc2b46fb",
-          "records": 348,
-          "lastDate": "2022-12-31"
-        },
-        "2023": {
-          "hash": "bf5fae936c0866d3",
-          "records": 360,
-          "lastDate": "2023-12-31"
-        },
-        "2024": {
-          "hash": "7a6695f42b82476d",
-          "records": 359,
-          "lastDate": "2024-12-31"
-        },
-        "2025": {
-          "hash": "f187b2ec78f7c20b",
-          "records": 365,
-          "lastDate": "2025-12-31"
-        },
-        "2026": {
-          "hash": "7da90ae37e84eae0",
-          "records": 264,
-          "lastDate": "2026-09-21"
-        }
-      }
+      "2021": {"h":"152e9f56c0e1c681","r":280,"d":18992},
+      "2022": {"h":"564466f9dc2b46fb","r":348,"d":19357},
+      "2023": {"h":"bf5fae936c0866d3","r":360,"d":19722},
+      "2024": {"h":"7a6695f42b82476d","r":359,"d":20088},
+      "2025": {"h":"f187b2ec78f7c20b","r":365,"d":20453},
+      "2026": {"h":"7da90ae37e84eae0","r":264,"d":20717}
     }
+  },
+  "provisional": {
+    "bcrp-interbancario-usd-pen": [20714]
   }
 }

@@ -3,14 +3,61 @@
  * whether a cached year is still current. Everything else the client does starts from here.
  */
 
+import { toDateString } from './binfmt'
 import { openCacheStore, type ICacheStore } from './cache'
+import { describeDataset, PROVISIONAL_DESCRIPTION } from './descriptions'
+
+/**
+ * The shape published at `manifest.json`: an index and nothing else.
+ *
+ * One letter per field and no prose, because this file is fetched by every client on every cache
+ * miss and its whole job is to answer "which years exist and did any of them move?". What each
+ * dataset means does not change between publishes, so it lives in descriptions.ts instead. The
+ * types below are what the client exposes; this is what crosses the wire.
+ */
+interface IWireFile {
+	/** hash — FNV-1a 64 of the uncompressed payload. */
+	h: string
+	/** records. */
+	r: number
+	/** the last day, as a unixDay — the same unit every record carries. */
+	d: number
+}
+
+interface IWireManifest {
+	version: number
+	generated: number
+	datasets: Record<string, Record<string, IWireFile>>
+	/** Per dataset, the unixDays that did not come from its own source. Absent when there are none. */
+	provisional?: Record<string, number[]>
+}
+
+/** The manifest shape this build reads. A different one is an error, not a partial read. */
+export const MANIFEST_VERSION = 2
 
 /** One published year. The path is not stored — it is `${datasetKey}/${year}.gz`. */
 export interface IManifestFile {
 	/** FNV-1a 64 of the uncompressed payload. The cache key, and the lambda's change detector. */
 	hash: string
 	records: number
+	/** Expanded from the published unixDay, because that is what a consumer wants to compare. */
 	lastDate: string
+}
+
+/**
+ * The days in a dataset that did not come from its own source, and where they did come from.
+ *
+ * The dates travel in the manifest — they change on every publish — and the prose comes from
+ * descriptions.ts. They live in the index and not in the records because they are at most a
+ * handful of days: a byte per record would cost 10 % of every file forever to mark three days,
+ * and would break every decoder already written against the 10-byte layout.
+ */
+export interface IManifestProvisional {
+	source: string
+	sourceUrl: string
+	note: string
+	/** ISO dates, ascending. */
+	dates: string[]
 }
 
 export interface IManifestDataset {
@@ -22,6 +69,8 @@ export interface IManifestDataset {
 	scale: number
 	hashAlgo: string
 	files: Record<string, IManifestFile>
+	/** Absent when every published day came from the dataset's own source, which is the norm. */
+	provisional?: IManifestProvisional
 }
 
 export interface IManifest {
@@ -34,6 +83,40 @@ export interface IManifest {
 /** Where a year of a dataset lives, derived the same way the Go side derives it. */
 export function filePath(datasetKey: string, year: string): string {
 	return `${datasetKey}/${year}.gz`
+}
+
+/**
+ * Turns the published index into what the rest of the client works with: prose from
+ * descriptions.ts, dates expanded from unixDays, one object per dataset.
+ *
+ * Done once per manifest load rather than lazily per lookup — it is a dozen small objects, and
+ * doing it here means nothing downstream has to know the wire format exists.
+ */
+function expand(wire: IWireManifest): IManifest {
+	if (wire?.version !== MANIFEST_VERSION) {
+		throw new Error(
+			`manifest.json está en la versión ${wire?.version} y este cliente lee la ` +
+				`${MANIFEST_VERSION}. Actualiza @ivanjoz/public-business-data.`,
+		)
+	}
+
+	const datasets: Record<string, IManifestDataset> = {}
+	for (const [datasetKey, years] of Object.entries(wire.datasets ?? {})) {
+		const files: Record<string, IManifestFile> = {}
+		for (const [year, file] of Object.entries(years)) {
+			files[year] = { hash: file.h, records: file.r, lastDate: toDateString(file.d) }
+		}
+
+		const flagged = wire.provisional?.[datasetKey]
+		datasets[datasetKey] = {
+			...describeDataset(datasetKey),
+			files,
+			...(flagged?.length
+				? { provisional: { ...PROVISIONAL_DESCRIPTION, dates: flagged.map(toDateString) } }
+				: {}),
+		}
+	}
+	return { version: wire.version, generated: wire.generated, datasets }
 }
 
 export interface IClientOptions {
@@ -150,23 +233,30 @@ export class ManifestStore {
 		// network on every later call.
 		this.forceNetwork = false
 
+		// The cache holds the published bytes, not the expanded view: what is stored stays exactly
+		// what was served, so a client that changes how it expands does not have to invalidate it.
 		if (storedIsFresh) {
-			return this.adopt(JSON.parse(textDecoder.decode(stored.bytes)) as IManifest, stored.fetchedAt)
+			return this.adopt(expand(JSON.parse(textDecoder.decode(stored.bytes))), stored.fetchedAt)
 		}
 
-		let fetched: IManifest
+		let wire: IWireManifest
 		try {
 			const response = await this.fetchImpl(this.url('manifest.json'))
 			if (!response.ok) throw new Error(`GET manifest.json respondió ${response.status}`)
 			const text = await response.text()
-			fetched = JSON.parse(text) as IManifest
+			wire = JSON.parse(text) as IWireManifest
 			await store.put(key, textEncoder.encode(text)).catch(() => undefined)
 		} catch (error) {
 			// Stale beats nothing: the data is a historical series, so an expired manifest still
 			// answers every question except "what happened today".
-			if (stored) return this.adopt(JSON.parse(textDecoder.decode(stored.bytes)) as IManifest, stored.fetchedAt)
+			if (stored) return this.adopt(expand(JSON.parse(textDecoder.decode(stored.bytes))), stored.fetchedAt)
 			throw error
 		}
+
+		// Expanded outside the try on purpose. A manifest this build cannot read is not a network
+		// failure, and answering it with the stale copy would hide "actualiza el cliente" behind
+		// data that still happens to work.
+		const fetched = expand(wire)
 
 		void this.sweep(fetched, store)
 		return this.adopt(fetched, Date.now())

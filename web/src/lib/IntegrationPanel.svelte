@@ -14,11 +14,14 @@
      * al dominio y no a localhost. Llega desde DEFAULT_BASE_URL, que es la del propio cliente.
      */
     baseUrl: string
+    /** Último día de la serie de SUNAT. */
     lastDate: string
+    /** Último día del interbancario, que va por detrás: el BCRP lo publica con retraso. */
+    bcrpLastDate: string
     years: string[]
   }
 
-  const { baseUrl, lastDate, years }: Props = $props()
+  const { baseUrl, lastDate, bcrpLastDate, years }: Props = $props()
 
   const firstYear = $derived(years[0] ?? '2021')
 
@@ -49,6 +52,34 @@
     descargan en el primer uso, no al importar.
   </p>
 
+  <p>
+    Se publican <strong>dos series</strong>, cada una con su familia de funciones. No son dos
+    vistas del mismo número: miden cosas distintas y casi nunca coinciden al céntimo el mismo día.
+  </p>
+
+  <table class="doc-table">
+    <thead>
+      <tr><th>para</th><th>qué usar</th><th>funciones</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>Facturación, libros contables, diferencia de cambio</td>
+        <td>SUNAT — el cierre SBS del día hábil anterior</td>
+        <td><code>getSunat…</code></td>
+      </tr>
+      <tr>
+        <td>Seguir el mercado, el dólar mayorista</td>
+        <td>BCRP — el interbancario, a lo que operaron los bancos</td>
+        <td><code>getBcrp…</code></td>
+      </tr>
+      <tr>
+        <td>Comprar o vender dólares de verdad</td>
+        <td colspan="2">Ninguna de las dos: es el precio del banco o de la casa de cambio, con su
+        spread, y no lo publica nadie</td>
+      </tr>
+    </tbody>
+  </table>
+
   <h2>1 · Importar</h2>
 
   <h3>Por URL, sin instalar nada</h3>
@@ -78,7 +109,7 @@
   )}
   {@render code('npm-use', 'ts', `import { getSunatRateYears } from '@ivanjoz/public-business-data'`)}
 
-  <h2>2 · Leer el tipo de cambio</h2>
+  <h2>2 · Leer el tipo de cambio oficial (SUNAT)</h2>
 
   {@render code(
     'api',
@@ -111,7 +142,92 @@ await describeSunatExchangeRate()       // fuente, unidad, escala, años`,
     serie que acaba el {lastDate} cruza seis archivos. Los descarga en paralelo.
   </div>
 
-  <h2>3 · Caché</h2>
+  <h2>3 · Leer el tipo de cambio de mercado (BCRP)</h2>
+
+  <p>
+    Las mismas funciones con otro prefijo, sobre las series diarias
+    <code>PD04637PD</code> y <code>PD04638PD</code> del BCRP: el interbancario, que es el precio al
+    que los bancos se compran y venden dólares entre sí.
+  </p>
+
+  {@render code(
+    'bcrp',
+    'ts',
+    `await getBcrpRate('${bcrpLastDate}')
+// { date: '${bcrpLastDate}', buy: 3.362, sell: 3.364, buyScaled: 3362, sellScaled: 3364 }
+// null si el mercado no operó ese día
+
+await getBcrpRateYears(5)               // BULK: los últimos 5 años
+await getBcrpRateRange('${firstYear}-01-01', '${bcrpLastDate}')
+await getLatestBcrpRate()
+await getBcrpMonthArrays(2026, 9)
+await getBcrpAvailableYears()
+await getBcrpLastPublishedDate()        // '${bcrpLastDate}', contando los provisionales
+await getBcrpLastConfirmedDate()        // hasta dónde llega el dato confirmado
+await describeBcrpExchangeRate()`,
+  )}
+
+  <div class="callout">
+    El BCRP publica el interbancario con <strong>un par de días hábiles de retraso</strong>, así
+    que su último día va por detrás del de SUNAT ({bcrpLastDate} frente a {lastDate} ahora mismo).
+    Para «el de hoy» no hay dato oficial: el que sí existe es el de SUNAT, que es el cierre SBS del
+    día hábil anterior.
+  </div>
+
+  <h3>Días provisionales</h3>
+
+  <p>
+    Para que la cola de la serie no quede vacía, <strong>los últimos hasta 3 días hábiles que el
+    BCRP aún no publica se rellenan</strong> con un tipo de referencia
+    (<code>@fawazahmed0/currency-api</code>), y llegan marcados:
+  </p>
+
+  {@render code(
+    'provisional',
+    'ts',
+    `const day = await getBcrpRate('${bcrpLastDate}')
+if (day?.provisional) {
+  // Valor de relleno: error medido de ±0,5 % contra el interbancario.
+  // No sirve para facturar ni para libros. Se sobrescribe con el valor
+  // del BCRP en cuanto lo publica, y se borra si nunca lo publica.
+}
+
+const { buy, provisional } = await getBcrpMonthArrays(2026, 9)
+provisional[17]                         // true si el día 18 es de relleno
+
+;(await describeBcrpExchangeRate()).provisional
+// { source, sourceUrl, note, dates: ['${bcrpLastDate}'] }`,
+  )}
+
+  <table class="doc-table">
+    <thead>
+      <tr><th>regla</th><th>qué significa</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>El BCRP siempre gana</td>
+        <td>Cuando publica el día, su valor sobrescribe al de relleno y el flag desaparece</td>
+      </tr>
+      <tr>
+        <td>Máximo 3 días hábiles</td>
+        <td>Nunca se rellena más atrás, ni un sábado ni un domingo</td>
+      </tr>
+      <tr>
+        <td>Caducan</td>
+        <td>Un día que el BCRP nunca confirma — un feriado peruano — se <strong>borra</strong> al
+        salir de la ventana, en vez de quedarse en la serie para siempre</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <p>
+    O sea que <strong>todo día más viejo que esos 3 días hábiles viene del BCRP y de nadie más</strong>.
+    El flag vive en el <code>manifest.json</code> y no en los registros: son un puñado de fechas, y
+    un byte por registro costaría el 10 % de cada archivo para siempre y rompería los decodificadores
+    ya escritos contra el formato de 10 bytes.
+  </p>
+
+  <h2>4 · Caché</h2>
 
   {@render code(
     'cache',
@@ -158,7 +274,7 @@ await clearCache()  // vacía IndexedDB`,
     usa el caducado: la serie es histórica y responde todo salvo «qué pasó hoy».
   </p>
 
-  <h2>4 · Sin el cliente</h2>
+  <h2>5 · Sin el cliente</h2>
 
   <p>Son archivos estáticos con <code>Access-Control-Allow-Origin: *</code>. El propio manifest documenta el formato.</p>
 
@@ -166,7 +282,8 @@ await clearCache()  // vacía IndexedDB`,
     'raw',
     'bash',
     `curl ${baseUrl}/manifest.json
-curl -s ${baseUrl}/sunat-usd-pen/2026.gz | gunzip | xxd | head`,
+curl -s ${baseUrl}/sunat-usd-pen/2026.gz | gunzip | xxd | head
+curl -s ${baseUrl}/bcrp-interbancario-usd-pen/2026.gz | gunzip | xxd | head`,
   )}
 
   <p>Cada registro son <strong>10 bytes, little endian</strong>, ordenados ascendentemente por día:</p>
@@ -190,8 +307,9 @@ curl -s ${baseUrl}/sunat-usd-pen/2026.gz | gunzip | xxd | head`,
   </div>
 
   <p class="foot">
-    Un día ausente significa que SUNAT no publicó. La cobertura no es un registro por fecha
-    calendario: la fuente rellena fines de semana en los años recientes y no en los antiguos.
+    Un día ausente significa que la fuente no publicó, y la cobertura no es un registro por fecha
+    calendario: SUNAT rellena fines de semana en los años recientes y no en los antiguos, y el
+    interbancario sólo existe los días en que el mercado operó — unos 250 al año.
   </p>
 </div>
 

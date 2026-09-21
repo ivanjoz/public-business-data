@@ -1,7 +1,7 @@
 {
   "name": "@ivanjoz/public-business-data",
   "version": "0.1.0",
-  "description": "Cliente de los datasets binarios publicados en public-business-data.un.pe (tipo de cambio SUNAT).",
+  "description": "Cliente de los datasets binarios publicados en public-business-data.un.pe (tipo de cambio SUNAT y tipo de cambio interbancario BCRP).",
   "type": "module",
   "main": "./dist/client.mjs",
   "module": "./dist/client.mjs",

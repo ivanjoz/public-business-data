@@ -4,7 +4,8 @@
 #   ./deploy.sh              compila, sube el .zip y actualiza el stack
 #   ./deploy.sh token        guarda github.token en SSM como SecureString y sale
 #   ./deploy.sh dry-run      corre el updater en local sin commitear
-#   ./deploy.sh backfill     regenera docs/ desde data/ con el codificador actual
+#   ./deploy.sh backfill     regenera docs/ desde data/ con el codificador actual (SUNAT)
+#   ./deploy.sh backfill-bcrp  regenera la serie del BCRP pidiéndosela a su API
 #   ./deploy.sh invoke       invoca la lambda desplegada y muestra su salida
 #   ./deploy.sh logs         sigue los logs de la lambda
 set -euo pipefail
@@ -53,7 +54,14 @@ case "${1:-deploy}" in
 
   backfill)
     cd updater
-    exec "$GO_BIN" run ./cmd/backfill -source ../data/tipo-cambio-sunat-usd-pen.json -out ../docs
+    exec "$GO_BIN" run ./cmd/backfill -dataset sunat -source ../data/tipo-cambio-sunat-usd-pen.json -out ../docs
+    ;;
+
+  backfill-bcrp)
+    # Sin snapshot en data/: el BCRP sí responde rangos históricos por API, así que la fuente de
+    # la verdad es la API misma. Va año por año, con pausas, porque está detrás de un WAF.
+    cd updater
+    exec "$GO_BIN" run ./cmd/backfill -dataset bcrp -from 2021-01-01 -out ../docs
     ;;
 
   dry-run)

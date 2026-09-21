@@ -41,6 +41,9 @@ describe('dist/client.mjs', () => {
 			'getSunatRate', 'getLatestSunatRate', 'getSunatRateRange', 'getSunatRateYears',
 			'getSunatMonthArrays', 'getSunatAvailableYears', 'getSunatLastPublishedDate',
 			'describeSunatExchangeRate', 'getManifestGenerated', 'createPublicBusinessData',
+			'getBcrpRate', 'getLatestBcrpRate', 'getBcrpRateRange', 'getBcrpRateYears',
+			'getBcrpMonthArrays', 'getBcrpAvailableYears', 'getBcrpLastPublishedDate',
+			'getBcrpLastConfirmedDate', 'describeBcrpExchangeRate',
 		] as const) {
 			expect(typeof client[name], name).toBe('function')
 		}
@@ -80,6 +83,19 @@ describe('dist/client.mjs', () => {
 		const days = await client.getSunatRateYears(5)
 		expect(days[0]?.date).toBe('2021-09-21')
 		expect(days.at(-1)?.date).toBe('2026-09-21')
+	})
+
+	it('resuelve el interbancario del BCRP desde el bundle', async () => {
+		const day = await client.getBcrpRate('2026-09-17')
+		expect(day?.buyScaled).toBe(3362)
+		expect(day?.provisional).toBe(false)
+		expect((await client.getLatestBcrpRate())?.date).toBe(await client.getBcrpLastPublishedDate())
+	})
+
+	it('el flag de provisional cruza el bundle', async () => {
+		expect((await client.getBcrpRate('2026-09-18'))?.provisional).toBe(true)
+		expect(await client.getBcrpLastConfirmedDate()).toBe('2026-09-17')
+		expect(await client.getBcrpLastPublishedDate()).toBe('2026-09-18')
 	})
 
 	it('getManifestGenerated devuelve el sello del manifest', async () => {

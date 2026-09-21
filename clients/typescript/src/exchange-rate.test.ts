@@ -7,7 +7,7 @@ import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
 
-import { createPublicBusinessData } from './index'
+import { createPublicBusinessData, MANIFEST_VERSION } from './index'
 import { MemoryStore } from './cache'
 
 const DOCS_DIR = join(import.meta.dirname, '../../../docs')
@@ -136,7 +136,7 @@ describe('SunatExchangeRate', () => {
 			const path = String(url).replace('https://public-business-data.un.pe/', '')
 			if (path === 'manifest.json') {
 				const manifest = JSON.parse(await readFile(join(DOCS_DIR, 'manifest.json'), 'utf8'))
-				manifest.datasets['sunat-usd-pen'].files['2026'].records = 999
+				manifest.datasets['sunat-usd-pen']['2026'].r = 999
 				return new Response(JSON.stringify(manifest), { status: 200 })
 			}
 			return new Response(new Uint8Array(await readFile(join(DOCS_DIR, path))), { status: 200 })
@@ -169,6 +169,195 @@ describe('SunatExchangeRate', () => {
 		await data.sunatExchangeRate.availableYears()
 
 		expect(requested.filter((path) => path === 'manifest.json')).toHaveLength(2)
+	})
+})
+
+describe('BcrpExchangeRate', () => {
+	it('describe el dataset del interbancario', async () => {
+		const { fetchImpl } = docsFetch()
+		const dataset = await createPublicBusinessData({ fetch: fetchImpl }).bcrpExchangeRate.describe()
+
+		// Misma escala y mismo layout que SUNAT: lo que cambia es de dónde salen los números.
+		expect(dataset.scale).toBe(1000)
+		expect(dataset.unit).toBe('PEN por 1 USD')
+		expect(dataset.source).toContain('BCRP')
+		expect(dataset.source).toContain('PD04637PD')
+	})
+
+	it('lee un día del interbancario redondeado a 3 decimales', async () => {
+		const { fetchImpl } = docsFetch()
+		const day = await createPublicBusinessData({ fetch: fetchImpl }).bcrpExchangeRate.at('2026-09-17')
+
+		// El BCRP responde 3.36214285714286 / 3.36371428571429, y declara la serie con 3 decimales.
+		expect(day?.buyScaled).toBe(3362)
+		expect(day?.sellScaled).toBe(3364)
+		expect(day?.date).toBe('2026-09-17')
+	})
+
+	it('los dos datasets comparten el manifest y se piden por separado', async () => {
+		const { fetchImpl, requested } = docsFetch()
+		const data = createPublicBusinessData({ fetch: fetchImpl })
+
+		await Promise.all([data.sunatExchangeRate.at('2026-09-17'), data.bcrpExchangeRate.at('2026-09-17')])
+
+		expect(requested.filter((path) => path === 'manifest.json')).toHaveLength(1)
+		expect(requested).toContain('sunat-usd-pen/2026.gz')
+		expect(requested).toContain('bcrp-interbancario-usd-pen/2026.gz')
+	})
+
+	it('el interbancario y el de SUNAT no coinciden el mismo día', async () => {
+		// No es un detalle de implementación sino la razón de que sean dos datasets: SUNAT publica
+		// el cierre SBS del día hábil anterior y el BCRP el promedio del mercado de ese día.
+		const { fetchImpl } = docsFetch()
+		const data = createPublicBusinessData({ fetch: fetchImpl })
+
+		const [sunat, bcrp] = await Promise.all([
+			data.sunatExchangeRate.at('2026-09-17'),
+			data.bcrpExchangeRate.at('2026-09-17'),
+		])
+		expect(sunat).not.toBeNull()
+		expect(bcrp).not.toBeNull()
+		expect(bcrp?.buyScaled).not.toBe(sunat?.buyScaled)
+	})
+
+	it('un rango del interbancario sale ordenado y sin fines de semana', async () => {
+		const { fetchImpl } = docsFetch()
+		const days = await createPublicBusinessData({ fetch: fetchImpl })
+			.bcrpExchangeRate.range('2026-09-01', '2026-09-30')
+
+		expect(days.length).toBeGreaterThan(10)
+		for (let index = 1; index < days.length; index++) {
+			expect(days[index]!.unixDay).toBeGreaterThan(days[index - 1]!.unixDay)
+		}
+		// 2026-09-05 fue sábado: el mercado no operó y el día no está en la serie.
+		expect(days.some((day) => day.date === '2026-09-05')).toBe(false)
+	})
+
+	it('marca el día provisional y deja el resto sin marcar', async () => {
+		const { fetchImpl } = docsFetch()
+		const data = createPublicBusinessData({ fetch: fetchImpl })
+
+		// 2026-09-18 es el viernes que el BCRP todavía no había publicado: va relleno.
+		const filled = await data.bcrpExchangeRate.at('2026-09-18')
+		expect(filled?.provisional).toBe(true)
+
+		const real = await data.bcrpExchangeRate.at('2026-09-17')
+		expect(real?.provisional).toBe(false)
+
+		// El otro dataset no tiene relleno y ningún día suyo puede salir marcado.
+		expect((await data.sunatExchangeRate.at('2026-09-18'))?.provisional).toBe(false)
+	})
+
+	it('el manifest explica de dónde sale el relleno', async () => {
+		const { fetchImpl } = docsFetch()
+		const dataset = await createPublicBusinessData({ fetch: fetchImpl }).bcrpExchangeRate.describe()
+
+		expect(dataset.provisional?.dates).toContain('2026-09-18')
+		expect(dataset.provisional?.source).toBeTruthy()
+		// La nota es lo que lee quien consume el manifest en crudo, sin este cliente.
+		expect(dataset.provisional?.note).toMatch(/no son oficiales/i)
+	})
+
+	it('un rango marca sólo los días de relleno que contiene', async () => {
+		const { fetchImpl } = docsFetch()
+		const days = await createPublicBusinessData({ fetch: fetchImpl })
+			.bcrpExchangeRate.range('2026-09-14', '2026-09-18')
+
+		const flagged = days.filter((day) => day.provisional).map((day) => day.date)
+		expect(flagged).toEqual(['2026-09-18'])
+		expect(days.length).toBeGreaterThan(1)
+	})
+
+	it('monthArrays trae la pista de qué slots son provisionales', async () => {
+		const { fetchImpl } = docsFetch()
+		const { buy, provisional } = await createPublicBusinessData({ fetch: fetchImpl })
+			.bcrpExchangeRate.monthArrays(2026, 9)
+
+		expect(provisional).toHaveLength(31)
+		// Índice 17 es el día 18. Sin esta pista, el valor entraría en una tabla financiera como
+		// un número más y nada diría que no está confirmado.
+		expect(provisional[17]).toBe(true)
+		expect(buy[17]).toBeGreaterThan(0)
+		expect(provisional[16]).toBe(false)
+	})
+
+	it('lastConfirmedDate se queda en el último día real, lastPublishedDate no', async () => {
+		const { fetchImpl } = docsFetch()
+		const data = createPublicBusinessData({ fetch: fetchImpl })
+
+		expect(await data.bcrpExchangeRate.lastPublishedDate()).toBe('2026-09-18')
+		expect(await data.bcrpExchangeRate.lastConfirmedDate()).toBe('2026-09-17')
+
+		// Sin relleno las dos responden lo mismo, y ninguna baja un año para hacerlo.
+		expect(await data.sunatExchangeRate.lastConfirmedDate()).toBe(
+			await data.sunatExchangeRate.lastPublishedDate(),
+		)
+	})
+
+	it('el flag no cuesta una segunda lectura del manifest', async () => {
+		// Con la ventana en 0 cada describe() es una petición, así que un método que lo pida dos
+		// veces se ve aquí y en ningún otro sitio.
+		const { fetchImpl, requested } = docsFetch()
+		const data = createPublicBusinessData({ fetch: fetchImpl, cacheMinutes: 0 })
+
+		await data.bcrpExchangeRate.at('2026-09-18')
+
+		expect(requested.filter((path) => path === 'manifest.json')).toHaveLength(1)
+	})
+
+	it('lastPublishedDate del BCRP va por detrás del de SUNAT', async () => {
+		const { fetchImpl } = docsFetch()
+		const data = createPublicBusinessData({ fetch: fetchImpl })
+
+		const [bcrp, sunat] = await Promise.all([
+			data.bcrpExchangeRate.lastPublishedDate(),
+			data.sunatExchangeRate.lastPublishedDate(),
+		])
+		// BCRPData publica el interbancario con un par de días hábiles de retraso. Quien necesite
+		// "el de hoy" tiene que saberlo, y por eso lastPublishedDate se lee del manifest.
+		expect(bcrp! < sunat!).toBe(true)
+	})
+})
+
+describe('manifest v2', () => {
+	it('lo publicado es un índice y nada más', async () => {
+		const wire = JSON.parse(await readFile(join(DOCS_DIR, 'manifest.json'), 'utf8'))
+
+		expect(wire.version).toBe(MANIFEST_VERSION)
+		// Los años cuelgan directo del dataset y cada uno son tres claves de una letra. Si alguna
+		// vez vuelve a aparecer prosa aquí, es peso que pagan todos los visitantes en cada publish.
+		const year = wire.datasets['sunat-usd-pen']['2026']
+		expect(Object.keys(year).sort()).toEqual(['d', 'h', 'r'])
+		expect(typeof year.d).toBe('number')
+		expect(wire.datasets['sunat-usd-pen'].files).toBeUndefined()
+		expect(wire.datasets['sunat-usd-pen'].title).toBeUndefined()
+	})
+
+	it('la descripción la pone el cliente y la fecha se expande del unixDay', async () => {
+		const { fetchImpl } = docsFetch()
+		const dataset = await createPublicBusinessData({ fetch: fetchImpl }).sunatExchangeRate.describe()
+
+		expect(dataset.title).toContain('SUNAT')
+		expect(dataset.hashAlgo).toBe('fnv-1a-64')
+		expect(dataset.files['2026']!.lastDate).toBe('2026-09-21')
+	})
+
+	it('otra versión se rechaza en vez de leerse a medias', async () => {
+		// Un manifest que esta build no entiende tiene que decirlo: leerlo como un índice vacío
+		// haría que los datasets desaparecieran en silencio en vez de fallar.
+		const fetchImpl = (async (url: string | URL) => {
+			const path = String(url).replace('https://public-business-data.un.pe/', '')
+			if (path === 'manifest.json') {
+				const wire = JSON.parse(await readFile(join(DOCS_DIR, 'manifest.json'), 'utf8'))
+				wire.version = MANIFEST_VERSION + 1
+				return new Response(JSON.stringify(wire), { status: 200 })
+			}
+			return new Response(new Uint8Array(await readFile(join(DOCS_DIR, path))), { status: 200 })
+		}) as unknown as typeof globalThis.fetch
+
+		await expect(
+			createPublicBusinessData({ fetch: fetchImpl }).sunatExchangeRate.availableYears(),
+		).rejects.toThrow(/versión 3 y este cliente lee la 2/)
 	})
 })
 

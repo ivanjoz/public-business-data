@@ -39,10 +39,20 @@ deployment_bucket = "main-serverless-deploys"
 # Parámetro SecureString con el PAT. Nunca como variable de entorno de la Lambda: ahí queda
 # visible en la consola de Lambda y en la de CloudFormation.
 github_token_ssm = "/public-business-data/github-token"
-# SUNAT publica temprano (el cierre de la SBS del día hábil anterior). Tres intentos al día
-# —09:00, 13:00 y 17:00 de Lima— cubren un retraso sin ser un poll agresivo: la corrida sin
-# cambios son tres GET y termina en menos de un segundo.
-schedule = "cron(0 14,18,22 ? * * *)"
+# Cada hora en punto y cuarto, de 06:15 a 20:15 de Lima: 15 corridas al día.
+#
+# EventBridge sólo entiende UTC y Lima es UTC−5 todo el año, así que la ventana local se escribe
+# como 11:15–23:15 más 00:15 y 01:15 del día siguiente. De ahí el rango partido: 0-1,11-23 son 15
+# horas, no 15 horas seguidas.
+#
+# Barrer la mañana entera es lo que hace que el dato aparezca cerca de cuando la fuente lo
+# publica: SUNAT saca temprano el cierre de la SBS del día hábil anterior, y el interbancario del
+# BCRP llega con un par de días hábiles de retraso y sin hora fija. Ninguno de los dos necesita
+# una cadencia propia porque cada corrida vuelve a pedir el mes en curso completo.
+#
+# Lo que hace que esto no sea un poll agresivo es la compuerta del hash: una corrida sin cambios
+# son cuatro GET, no commitea nada y termina en menos de un segundo.
+schedule = "cron(15 0-1,11-23 ? * * *)"
 
 # ─── Actualizador ───────────────────────────────────────────────────────────
 [updater]
