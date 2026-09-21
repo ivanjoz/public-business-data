@@ -1,6 +1,6 @@
 {
   "version": 2,
-  "generated": 1789989336,
+  "generated": 1790025335,
   "datasets": {
     "bcrp-interbancario-usd-pen": {
       "2021": {"h":"e88af8ca669d8de1","r":251,"d":18992},
@@ -8,7 +8,7 @@
       "2023": {"h":"63ad89b1b2bd42ed","r":250,"d":19720},
       "2024": {"h":"aa2ef09d6eb68397","r":246,"d":20087},
       "2025": {"h":"843d4f53f5904c4c","r":248,"d":20453},
-      "2026": {"h":"f3e317b0e90c9022","r":177,"d":20717}
+      "2026": {"h":"f3d10b4637d6e242","r":177,"d":20717}
     },
     "sunat-usd-pen": {
       "2021": {"h":"152e9f56c0e1c681","r":280,"d":18992},
@@ -20,6 +20,6 @@
     }
   },
   "provisional": {
-    "bcrp-interbancario-usd-pen": [20714,20717]
+    "bcrp-interbancario-usd-pen": [20717]
   }
 }
