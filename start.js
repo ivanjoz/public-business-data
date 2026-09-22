@@ -6,10 +6,10 @@ const GO_CHECK_SCRIPT = "go test ./..."
 const WEB_PORT = Number.parseInt(process.env.PBD_PORT || "3573", 10)
 //********************************************************* */
 
-const { spawn, execSync } = require("child_process")
-const { platform } = require("os")
-const path = require("path")
-const fs = require("fs")
+import { spawn, execSync } from "node:child_process"
+import { platform } from "node:os"
+import path from "node:path"
+import fs from "node:fs"
 const isWindows = platform() === "win32"
 
 // Igual que en genix: con doble click no hay consola, así que se reabre dentro de una.
@@ -20,15 +20,17 @@ if (!process.stdout.isTTY) {
   } else {
     console.error("Plataforma no soportada para el arranque sin consola.")
   }
-  return
+  // En ESM no hay `return` de nivel superior: el relanzamiento termina aquí igual que antes.
+  process.exit(0)
 }
 
-// Todas las rutas salen de __dirname y nunca del CWD: el launcher se puede invocar desde
-// cualquier carpeta, o con doble click, que abre la terminal en el home.
-const webPath = path.join(__dirname, "web")
-const clientPath = path.join(__dirname, "clients", "typescript")
-const updaterPath = path.join(__dirname, "updater")
-const docsPath = path.join(__dirname, "docs")
+// Todas las rutas salen del directorio del script y nunca del CWD: el launcher se puede invocar
+// desde cualquier carpeta, o con doble click, que abre la terminal en el home.
+const rootPath = import.meta.dirname
+const webPath = path.join(rootPath, "web")
+const clientPath = path.join(rootPath, "clients", "typescript")
+const updaterPath = path.join(rootPath, "updater")
+const docsPath = path.join(rootPath, "docs")
 
 const BLUE_BAR = "\x1b[44m \x1b[0m"
 const CYAN_BAR = "\x1b[46m \x1b[0m"
@@ -96,7 +98,7 @@ if (staleFormat || !fs.existsSync(path.join(docsPath, "bcrp-interbancario-usd-pe
 // ─── Procesos ───────────────────────────────────────────────────────────────
 
 const runScript = (script, bar, workingDirectory, environment = {}) => {
-  console.log("Ejecutando:", script, "::", path.relative(__dirname, workingDirectory) || ".")
+  console.log("Ejecutando:", script, "::", path.relative(rootPath, workingDirectory) || ".")
 
   // workingDirectory va por la opción cwd y no como un `cd` antepuesto: así no hay que citar
   // rutas con espacios ni duplicar el comando por plataforma.

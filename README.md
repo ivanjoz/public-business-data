@@ -53,8 +53,13 @@ Los bundlers no resuelven imports por HTTP, así que ahí va instalado desde el 
 import { getSunatMonthArrays, setCache } from '@ivanjoz/public-business-data'
 ```
 
-El paquete vive en `clients/typescript/` y trae sus `.d.ts`. Si prefieres compilar el TypeScript
-con tu propio build en vez de consumir el bundle, importa el subpath `/src`:
+El paquete es **el repositorio entero**: el `package.json` del raíz resuelve el import al bundle
+publicado, `docs/client.mjs`, y los tipos al fuente de `clients/typescript/src`, así que el archivo
+que sirve Pages y el que resuelve un bundler son exactamente el mismo. No se publica en el registro
+de npm: instalar desde GitHub es la única vía.
+
+Si prefieres compilar el TypeScript con tu propio build en vez de consumir el bundle, importa el
+subpath `/src`:
 
 ```ts
 import { getSunatRate } from '@ivanjoz/public-business-data/src'

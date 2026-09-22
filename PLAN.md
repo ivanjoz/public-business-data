@@ -291,13 +291,13 @@ leerlo cross-origin sin proxy.
 
 ## 5. Cliente TypeScript
 
-`clients/typescript/`, paquete npm sin dependencias, consumible desde el navegador y desde Node
+`clients/typescript/`, cliente sin dependencias, consumible desde el navegador y desde Node
 (ambos tienen `DecompressionStream`).
 
 ```
 clients/typescript/
-├── package.json  tsconfig.json  tsconfig.build.json
-├── build.ts                  bun build → un solo .mjs, a dist/ y a docs/
+├── package.json  tsconfig.json   manifiesto de desarrollo: build, tests, typecheck
+├── build.ts                  bun build → un solo .mjs, a docs/
 └── src/
     ├── index.ts              API plana + createPublicBusinessData()
     ├── manifest.ts           fetch + caché del manifest, ventana de setCache()
@@ -307,14 +307,17 @@ clients/typescript/
     └── *.test.ts             46 tests contra los .gz reales de docs/
 ```
 
-**Se distribuye como un solo archivo.** `bun run build` emite un `.mjs` de 7,8 KB sin
-dependencias, a dos sitios desde un mismo build para que no puedan discrepar:
+**Se distribuye como un solo archivo.** `bun run build` emite `docs/client.mjs`, un `.mjs` sin
+dependencias, y ése es el único artefacto: lo sirve Pages —
+`import { getSunatRate } from 'https://public-business-data.un.pe/client.mjs'` funciona sin instalar
+nada, en navegador o en Deno — y es también lo que resuelve un bundler, porque el paquete que se
+instala es el repositorio entero y el `package.json` del raíz apunta su `main` ahí. Un segundo
+bundle en `dist/` sería una copia que puede quedarse atrás del que ven los usuarios por URL.
 
-- `docs/client.mjs` — publicado junto a los datos, así que
-  `import { getSunatRate } from 'https://public-business-data.un.pe/client.mjs'` funciona sin instalar
-  nada, en navegador o en Deno.
-- `clients/typescript/dist/client.mjs` — lo que resuelve el `exports` del paquete npm, para los
-  bundlers (Vite no resuelve imports por HTTP). Con sus `.d.ts` al lado.
+**Los tipos son el fuente.** El `exports` del raíz resuelve la condición `types` a
+`clients/typescript/src/index.ts`, no a un `.d.ts` generado: no hay árbol de declaraciones que
+versionar ni que pueda discrepar del bundle. A cambio, un error de tipos en `src/` ya no se queda
+en casa, así que `build.ts` typechequea antes de escribir nada.
 
 El import es estático y las funciones `async`. **Importar el módulo no hace nada**: la instancia
 compartida se construye perezosamente, así que una página que sólo importa el bundle no abre
@@ -445,7 +448,7 @@ public-business-data/
 │   ├── cmd/backfill/          siembra docs/: snapshot o API       ✅
 │   ├── cmd/updater/           handler Lambda + modo CLI           ✅
 │   └── cloud/template.yml     CloudFormation                      ✅
-└── clients/typescript/        paquete npm                         ✅ 55 tests
+└── clients/typescript/        cliente TS (se instala desde GitHub) ✅ 55 tests
 ```
 
 ---

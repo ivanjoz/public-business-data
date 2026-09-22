@@ -10,9 +10,6 @@ updater/*.zip
 
 node_modules/
 
-# Artefacto de build del cliente; docs/client.mjs sí se versiona (lo sirve Pages)
-clients/typescript/dist/
-
 # Generados por SvelteKit: .svelte-kit en cada `sync`, y web/build es el intermedio del que
 # scripts/publish.mjs copia index.html y _app a docs/. Lo que se publica es docs/, y ése sí va.
 .svelte-kit/

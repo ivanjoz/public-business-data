@@ -1,0 +1,22 @@
+{
+  "name": "@ivanjoz/public-business-data",
+  "version": "0.1.0",
+  "description": "Cliente de los datasets binarios publicados en public-business-data.un.pe (tipo de cambio SUNAT y tipo de cambio interbancario BCRP).",
+  "type": "module",
+  "main": "./docs/client.mjs",
+  "module": "./docs/client.mjs",
+  "types": "./clients/typescript/src/index.ts",
+  "exports": {
+    ".": {
+      "types": "./clients/typescript/src/index.ts",
+      "default": "./docs/client.mjs"
+    },
+    "./src": "./clients/typescript/src/index.ts"
+  },
+  "sideEffects": false,
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ivanjoz/public-business-data.git"
+  }
+}
