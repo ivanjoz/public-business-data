@@ -1,0 +1,1 @@
+import{L as e,V as t,_ as n,et as r,tt as i}from"../chunks/DQfOmG1Z.js";import"../chunks/xihTtKlq.js";import{n as a}from"../chunks/CLf9hTYH.js";import{t as o}from"../chunks/BsbcGuZX.js";function s(s,c){i(c,!0);let l=a(`sunat`);n(`1uha8ag`,n=>{e(()=>{t.title=`Tipo de Cambio SUNAT · public-business-data`})}),o(s,{get dataset(){return l}}),r()}export{s as component};

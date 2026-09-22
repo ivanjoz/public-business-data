@@ -6,6 +6,7 @@
   import { page } from '$app/state'
   import { afterNavigate } from '$app/navigation'
   import { getManifestGenerated, setBaseUrl } from '$client'
+  import { DATASET_PAGES } from '$lib/datasets'
 
   const { children } = $props()
   let menuOpen = $state(false)
@@ -37,15 +38,8 @@
   // único que hay dentro, y un handler en el contenedor sería un gesto sólo de ratón.
   afterNavigate(() => { menuOpen = false })
 
-  /**
-   * Una fila por página, no por dataset: las dos series de tipo de cambio comparten página y se
-   * eligen con el selector de la muestra, porque la pregunta que responden es la misma y lo que
-   * cambia es quién la contesta. Un dataset de otra cosa sí sería una fila más.
-   */
-  const datasets = [
-    { href: '/', code: 'TC', name: 'Tipo de Cambio', detail: 'SUNAT y BCRP · USD/PEN' },
-  ]
-
+  // Una fila por dataset, y cada dataset con su página: la lista sale del registro, así que
+  // publicar una serie nueva es añadirla allí y nada más.
   const isCurrent = (href: string) => page.url.pathname === `${base}${href}`
 </script>
 
@@ -73,9 +67,8 @@
   <div class="shell">
     <aside class="sidebar" class:is-open={menuOpen}>
       <div class="sidebar-title">DATASETS</div>
-      {#each datasets as dataset (dataset.href)}
+      {#each DATASET_PAGES as dataset (dataset.href)}
         <a class="dataset" class:is-current={isCurrent(dataset.href)} href="{base}{dataset.href}">
-          <span class="dataset-code">{dataset.code}</span>
           <span class="dataset-text">
             <span class="dataset-name">{dataset.name}</span>
             <span class="dataset-detail">{dataset.detail}</span>
@@ -178,7 +171,6 @@
   .dataset {
     display: flex;
     align-items: center;
-    gap: 10px;
     padding: 8px;
     border-radius: 6px;
     text-decoration: none;
@@ -188,20 +180,6 @@
   .dataset:hover { background: #f1f2fa; }
 
   .dataset.is-current { background: #eeefff; }
-
-  .dataset-code {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    width: 30px;
-    height: 30px;
-    flex-shrink: 0;
-    border-radius: 6px;
-    background: #4042a3;
-    color: #fff;
-    font-size: 12px;
-    font-weight: 600;
-  }
 
   .dataset-text { display: flex; flex-direction: column; line-height: 1.25; }
   .dataset-name { font-size: 14px; font-weight: 500; }

@@ -579,7 +579,11 @@ retendría un dato que sí llegó por culpa de otro que no.
 - El cliente: `ExchangeRate` es ahora una clase parametrizada por la clave del dataset, con
   `SunatExchangeRate` y `BcrpExchangeRate` encima. Las dos comparten `ManifestStore`, así que una
   página que muestre ambas pide `manifest.json` una sola vez.
-- El sitio: selector de serie en la muestra, y la pestaña de integración documenta las dos.
+- El sitio: **una página por dataset** —`/` para SUNAT y `/bcrp-interbancario/` para el
+  interbancario—, cada una con su entrada en el menú y con su pestaña de integración documentando
+  sólo su propia familia de funciones. Las dos series no son dos vistas del mismo número, así que
+  tampoco son dos pestañas de la misma página: la ruta no lleva la clave del dataset porque
+  `bcrp-interbancario-usd-pen/` es la carpeta de datos y una página con ese nombre la taparía.
 
 ---
 

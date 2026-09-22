@@ -2,8 +2,9 @@
  * Lleva el sitio construido a docs/, que es lo que publica GitHub Pages.
  *
  * docs/ ya contiene los datos — los .gz, el manifest, client.mjs, CNAME — escritos por el
- * updater en Go y por el build del cliente. El sitio sólo aporta index.html y _app/, así que
- * esto copia exactamente eso y nada más: un sync con --delete borraría el dataset entero.
+ * updater en Go y por el build del cliente. El sitio sólo aporta _app/ y el index.html de cada
+ * página, así que esto copia exactamente eso y nada más: un sync con --delete borraría el
+ * dataset entero.
  *
  * Antes de copiar, poda los assets huérfanos del build (ver prune()).
  *
@@ -21,8 +22,27 @@ const webDir = join(dirname(fileURLToPath(import.meta.url)), '..')
 const buildDir = join(webDir, 'build')
 const docsDir = join(webDir, '..', 'docs')
 
-/** Lo único que el sitio posee dentro de docs/. Todo lo demás es dato y no se toca. */
-const ownedByTheSite = ['index.html', '_app']
+/**
+ * Lo que el sitio posee dentro de docs/: la raíz, sus chunks y una carpeta por página
+ * prerenderizada (trailingSlash: 'always' emite carpeta/index.html). Todo lo demás es dato y no
+ * se toca.
+ *
+ * Las páginas no van escritas a mano sino descubiertas en la carpeta que toque —el build al
+ * publicar, docs/ al limpiar—, para que añadir un dataset sea añadir su ruta y nada más. Se
+ * reconocen por llevar un index.html: las carpetas de datos —sunat-usd-pen,
+ * bcrp-interbancario-usd-pen— sólo tienen .gz, así que quedan fuera aunque el build las haya
+ * copiado como assets estáticos.
+ */
+function siteEntries(directory) {
+  if (!existsSync(directory)) return []
+  const pages = readdirSync(directory).filter(
+    (entry) =>
+      entry !== '_app' &&
+      statSync(join(directory, entry)).isDirectory() &&
+      existsSync(join(directory, entry, 'index.html')),
+  )
+  return ['index.html', '_app', ...pages]
+}
 
 function walk(directory) {
   const found = []
@@ -73,9 +93,14 @@ function prune() {
   return removedTotal
 }
 
-/** Borra de docs/ sólo lo que el sitio posee. Los datos viven al lado y no se tocan. */
+/**
+ * Borra de docs/ sólo lo que el sitio posee. Los datos viven al lado y no se tocan.
+ *
+ * Mira docs/ y no el build: esto corre antes de vite, cuando el build todavía no existe. Así una
+ * página que se quitó del sitio también desaparece de la publicación.
+ */
 function cleanDocs() {
-  for (const entry of ownedByTheSite) {
+  for (const entry of siteEntries(docsDir)) {
     rmSync(join(docsDir, entry), { recursive: true, force: true })
   }
 }
@@ -96,7 +121,7 @@ const pruned = prune()
 if (pruned === 0) console.log('  nada que podar')
 
 console.log('==> Publicando en docs/')
-for (const entry of ownedByTheSite) {
+for (const entry of siteEntries(buildDir)) {
   const source = join(buildDir, entry)
   const target = join(docsDir, entry)
   if (!existsSync(source)) {
