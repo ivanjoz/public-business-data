@@ -24,6 +24,10 @@ const SunatTodayURL = "https://www.sunat.gob.pe/a/txt/tipoCambio.txt"
 // MirrorMonthURL answers the whole month as JSON. It rate-limits bursts with a 429.
 const MirrorMonthURL = "https://api.apis.net.pe/v1/tipo-cambio-sunat?month=%02d&year=%d"
 
+// MirrorDayURL answers a single date, weekends included. It is what still reaches into the past
+// since MirrorMonthURL started answering only today.
+const MirrorDayURL = "https://api.apis.net.pe/v1/tipo-cambio-sunat?fecha=%s"
+
 // userAgent is sent because both endpoints answer differently to a bare Go client.
 const userAgent = "public-business-data/1.0 (+https://github.com/ivanjoz/public-business-data)"
 
@@ -78,11 +82,43 @@ func FetchMonth(ctx context.Context, client *http.Client, year int, month time.M
 		return nil, err
 	}
 
+	// Since 2026-10-08 the v1 endpoint ignores month and year and answers only today, as a single
+	// object instead of an array. Both shapes are accepted so the run keeps today's rate either way.
 	var days []mirrorDay
 	if err := json.Unmarshal(body, &days); err != nil {
-		return nil, fmt.Errorf("respuesta inesperada del espejo (%s): %w", truncate(string(body), 120), err)
+		var single mirrorDay
+		if errSingle := json.Unmarshal(body, &single); errSingle != nil || single.Fecha == "" {
+			return nil, fmt.Errorf("respuesta inesperada del espejo (%s): %w", truncate(string(body), 120), err)
+		}
+		days = []mirrorDay{single}
 	}
 
+	return mirrorRates(days)
+}
+
+// FetchDay reads one date from the mirror. A date the mirror has nothing for comes back as an
+// error, so a backfill reports the hole instead of publishing a zero.
+func FetchDay(ctx context.Context, client *http.Client, date time.Time) (DailyRate, error) {
+	body, err := getWithRetry(ctx, client, fmt.Sprintf(MirrorDayURL, date.Format(time.DateOnly)), userAgent)
+	if err != nil {
+		return DailyRate{}, err
+	}
+	var day mirrorDay
+	if err := json.Unmarshal(body, &day); err != nil {
+		return DailyRate{}, fmt.Errorf("respuesta inesperada del espejo (%s): %w", truncate(string(body), 120), err)
+	}
+	rates, err := mirrorRates([]mirrorDay{day})
+	if err != nil {
+		return DailyRate{}, err
+	}
+	if len(rates) != 1 || !rates[0].Date.Equal(date) || rates[0].Buy == 0 || rates[0].Sell == 0 {
+		return DailyRate{}, fmt.Errorf("el espejo no tiene el %s: %s", date.Format(time.DateOnly), truncate(string(body), 120))
+	}
+	return rates[0], nil
+}
+
+// mirrorRates converts the mirror's days, skipping any currency other than the dollar.
+func mirrorRates(days []mirrorDay) ([]DailyRate, error) {
 	rates := make([]DailyRate, 0, len(days))
 	for _, day := range days {
 		if day.Moneda != "" && day.Moneda != "USD" {

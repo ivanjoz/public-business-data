@@ -39,6 +39,7 @@ var lima = time.FixedZone("-05", -5*60*60)
 func main() {
 	configPath := flag.String("config", "../config.toml", "config.toml a leer")
 	dryRun := flag.Bool("dry-run", false, "calcula los hashes y reporta, sin commitear")
+	sunatFrom := flag.String("sunat-desde", "", "rellena SUNAT día por día desde esta fecha (YYYY-MM-DD) hasta hoy, sólo en local")
 	flag.Parse()
 
 	loaded, err := config.Load(*configPath)
@@ -54,6 +55,14 @@ func main() {
 			return run(ctx, loaded)
 		})
 		return
+	}
+
+	if *sunatFrom != "" {
+		from, err := time.Parse(time.DateOnly, *sunatFrom)
+		if err != nil {
+			log.Fatalf("-sunat-desde inválido: %v", err)
+		}
+		sunatBackfillFrom = from
 	}
 
 	report, err := run(context.Background(), loaded)
@@ -82,11 +91,19 @@ func run(ctx context.Context, loaded config.Config) (publish.Report, error) {
 
 	updates := []publish.Update{}
 
-	sunat, err := fetchSunat(ctx, client, now, loaded.Updater.LookbackDays)
-	if err != nil {
-		return publish.Report{}, err
+	// SUNAT failing does not hold back the BCRP either; the run only fails when neither arrived.
+	var sunat []sources.DailyRate
+	var sunatErr error
+	if sunatBackfillFrom.IsZero() {
+		sunat, sunatErr = fetchSunat(ctx, client, now, loaded.Updater.LookbackDays)
+	} else {
+		sunat, sunatErr = fetchSunatDays(ctx, client, sunatBackfillFrom, now)
 	}
-	updates = append(updates, publish.Update{Key: manifest.ExchangeRateSunat, Fetched: sunat})
+	if sunatErr != nil {
+		logLine("aviso: no se pudo leer el tipo de cambio de SUNAT: %v", sunatErr)
+	} else {
+		updates = append(updates, publish.Update{Key: manifest.ExchangeRateSunat, Fetched: sunat})
+	}
 
 	// The BCRP is allowed to fail without failing the run. Its endpoint is behind a WAF and the
 	// series it answers is a different one from SUNAT's: losing it for a few hours costs the
@@ -98,6 +115,9 @@ func run(ctx context.Context, loaded config.Config) (publish.Report, error) {
 		logLine("aviso: el BCRP no publicó ningún día del mes en curso todavía")
 	} else {
 		updates = append(updates, bcrp)
+	}
+	if sunatErr != nil && len(updates) == 0 {
+		return publish.Report{}, sunatErr
 	}
 
 	repo := github.New(loaded.GitHub.Owner, loaded.GitHub.Repo, loaded.GitHub.Branch,
@@ -130,15 +150,20 @@ func run(ctx context.Context, loaded config.Config) (publish.Report, error) {
 
 // fetchSunat is the mirror's month plus the official file for today, collapsed into one series.
 func fetchSunat(ctx context.Context, client *http.Client, now time.Time, lookbackDays int) ([]sources.DailyRate, error) {
-	monthRates, err := sources.FetchMonth(ctx, client, now.Year(), now.Month())
-	if err != nil {
-		return nil, fmt.Errorf("espejo: %w", err)
+	// Either source is allowed to fail as long as the other one answers. The mirror going down
+	// used to fail the whole run, which also held back the BCRP and SUNAT's own file: that is how
+	// the site went three weeks without an update after the mirror changed its response in
+	// October 2026. Only both failing together means there is nothing to publish.
+	monthRates, mirrorErr := sources.FetchMonth(ctx, client, now.Year(), now.Month())
+	if mirrorErr != nil {
+		logLine("aviso: no se pudo leer el espejo: %v", mirrorErr)
 	}
 
-	// The official file is allowed to fail without failing the run: it answers only today, and
-	// the mirror already carries that day. Losing the cross-check is worth less than the update.
 	var official *sources.DailyRate
 	if today, err := sources.FetchToday(ctx, client); err != nil {
+		if mirrorErr != nil {
+			return nil, fmt.Errorf("espejo: %v; archivo oficial: %w", mirrorErr, err)
+		}
 		logLine("aviso: no se pudo leer el archivo oficial de SUNAT: %v", err)
 	} else {
 		official = &today
@@ -146,6 +171,33 @@ func fetchSunat(ctx context.Context, client *http.Client, now time.Time, lookbac
 	}
 
 	return publish.KeepLastDays(publish.Merge(monthRates, official), lookbackDays, now), nil
+}
+
+// sunatBackfillFrom is set by -sunat-desde. Zero is the normal run; the Lambda never sets it.
+var sunatBackfillFrom time.Time
+
+// mirrorDayPause spaces the per-day requests of a backfill: the mirror answers bursts with a 429.
+const mirrorDayPause = 1500 * time.Millisecond
+
+// fetchSunatDays asks the mirror one date at a time, from `from` to today. It is the way to repair
+// a hole older than the current day now that the mirror's month query only answers today. Any day
+// the mirror cannot give fails the backfill: a partial one would publish a series with gaps that
+// look like holidays.
+func fetchSunatDays(ctx context.Context, client *http.Client, from, now time.Time) ([]sources.DailyRate, error) {
+	today := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC)
+	var rates []sources.DailyRate
+	for day := from; !day.After(today); day = day.AddDate(0, 0, 1) {
+		if len(rates) > 0 {
+			time.Sleep(mirrorDayPause)
+		}
+		rate, err := sources.FetchDay(ctx, client, day)
+		if err != nil {
+			return nil, fmt.Errorf("espejo %s: %w", day.Format(time.DateOnly), err)
+		}
+		logLine("sunat %s: %d/%d", day.Format(time.DateOnly), rate.Buy, rate.Sell)
+		rates = append(rates, rate)
+	}
+	return rates, nil
 }
 
 // fetchBCRP asks for the month to date and then fills what the BCRP has not published yet.
